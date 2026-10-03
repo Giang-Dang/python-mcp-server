@@ -1169,6 +1169,103 @@ Same 25 tables and comments as before the change: the behaviour did not change, 
 - **Table metadata and `select()`**: https://docs.sqlalchemy.org/en/20/tutorial/data_select.html
 - **Connection pooling**: https://docs.sqlalchemy.org/en/20/core/pooling.html
 
+## Step 11: Audit imported Codex configuration and diagnose terminal popups
+
+### Goal and why
+
+Audit the Claude Code import without changing Claude's configuration, chat bodies,
+database data, branches, or unrelated repository edits. The import history records
+87 items across eight roots: 21 skills, 2 instruction files, 4 plugins, 1 MCP
+configuration, 16 subagents, and 43 sessions.
+
+During the audit, the user reported many Git Bash popup windows. Their process
+command lines identified Codex's imported Warp notification scripts. Warp's hook
+commands invoke `.sh` files directly. Windows associates `.sh` with
+`"C:\Program Files\Git\git-bash.exe" --no-cd "%L" %*`, so each hook opens a GUI
+terminal. The observed events included session start, prompt submission,
+permission requests, and post-tool use. This also means audit tool calls can
+trigger additional windows while an old session retains cached hooks.
+
+The chosen repair disables Warp and security-guidance in Codex using its native
+configuration writer, as authorized in the cleanup plan. Changing system file
+associations, changing PATH, editing plugin caches, and disabling all hooks were
+rejected because they affect more than the imported plugins. Claude settings and
+the installed Warp application remain unchanged.
+
+### Commands and operations
+
+```powershell
+Get-CimInstance Win32_Process
+Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\.sh'
+Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\sh_auto_file\shell\open\command'
+codex --version
+codex app-server generate-json-schema --experimental --out <temporary-directory>\schema
+codex app-server daemon version
+```
+
+Process inspection compared executable names, command lines, creation times, and
+parents. Registry reads confirmed the shell association without modifying it.
+The generated schema established the installed runtime's supported RPC fields.
+The installed CLI and managed daemon both reported version `0.160.0`.
+
+A hidden, temporary Python stdio client called `initialize`, `config/read`,
+`config/batchWrite`, `skills/list`, `hooks/list`, and
+`externalAgentConfig/detect`. It did not start a model turn or run a workflow.
+The configuration write used the user's layer version as `expectedVersion` and
+set only these keys to `false`:
+
+```text
+plugins."warp@claude-code-warp".enabled
+plugins."security-guidance@claude-plugins-official".enabled
+```
+
+After explicit user approval, only `git-bash.exe`, `mintty.exe`, and `bash.exe`
+processes whose command lines pointed to Warp plugin `scripts/on-*.sh` were
+stopped. Creation-time checks guarded against process-ID reuse. Normal terminals
+and application processes were excluded.
+
+### Files and real results
+
+- Temporary audit helpers and generated schemas:
+  `C:\Users\dangv\AppData\Local\Temp\codex-import-cleanup-20261003`.
+- Original config backup and hash manifest:
+  `C:\Users\dangv\.codex\maintenance\import-cleanup\runs\20261003T101455650223Z-popup-fix`.
+- `config/batchWrite` returned `status: ok`; parsed TOML comparison confirmed that
+  only the two approved flags changed.
+- A fresh runtime reported zero hooks from the two disabled plugins in all eight
+  roots. GitNexus and Vercel hooks remained present and trusted.
+- The initial focused process snapshot contained 132 Warp-related `mintty.exe`
+  windows, 132 `git-bash.exe` processes, and 128 `bash.exe` processes. Counts rose
+  while cached hooks remained active. The accumulated matching processes were
+  closed, but replacement windows were observed afterward.
+- Live repository status at the start contained only untracked `AGENTS.md` in
+  this repository. The previously reported roadmap modification was absent.
+  `docs/roadmap.md` was hashed for preservation and was not edited by this audit.
+
+### Troubleshooting and open validation
+
+- The first metadata read used the Windows default text encoding and failed with
+  `UnicodeDecodeError`; subsequent reads explicitly used UTF-8.
+- A PowerShell diagnostic piped a bare `foreach` statement and failed with
+  `An empty pipe element is not allowed`; collecting the rows before piping fixed it.
+- Sandbox Git inspection could not read the host ignore file. Host-visible
+  inspection succeeded, so this was not treated as a repository failure.
+- The fresh runtime loaded the disabled-plugin settings, but existing sessions
+  retained Warp hooks. An attempted connection through `app-server proxy` timed
+  out during initialization. No successful live reload is claimed.
+- A runtime restart requires coordination with other active tasks. Until that
+  restart and a subsequent normal synchronization are observed, popup recurrence
+  and import-persistence validation remain open.
+
+### Concepts
+
+- Path-specific skill controls:
+  https://learn.chatgpt.com/docs/build-skills
+- Structured configuration writes and external-agent imports:
+  https://learn.chatgpt.com/docs/app-server
+- Windows process inspection:
+  https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process
+
 ## Step 12: Characterize and separate the seeder (2026-10-03)
 
 Goal: preserve generated data while separating pure dataset rules and workflows
@@ -1209,6 +1306,106 @@ now receive the selected Settings object through the process initializer.
 Concepts: [spawn](https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods),
 [COPY](https://www.postgresql.org/docs/17/sql-copy.html),
 [SQLGlot](https://sqlglot.com/sqlglot.html).
+
+## Step 13: Install the manual import audit and repair command (2026-10-03)
+
+### Goal and why
+
+Make the approved import repairs repeatable without a background watcher or
+changes to Claude's originals. Path-specific overrides preserve preferred
+personal skills and Vercel wrappers while keeping installed plugin files intact.
+Name-only deduplication was rejected because project skills contain legitimate
+differences. Whole-file replacement of imported instructions was rejected in
+favor of narrow substitutions with exclusive file locks and content checks.
+
+### Commands
+
+```powershell
+$cleanup = "$env:USERPROFILE\.codex\maintenance\import-cleanup\Import-Cleanup.ps1"
+& $cleanup -Mode Apply -WhatIf
+& $cleanup -Mode Apply
+& $cleanup -Mode Apply
+& $cleanup
+python -X utf8 -m unittest discover -s "$env:USERPROFILE\.codex\maintenance\import-cleanup" -p test_cleanup.py -v
+```
+
+The first command previews repairs. Apply backs up affected configuration and
+instructions, uses Codex's `config/batchWrite` with `expectedVersion` for supported
+settings, and verifies each imported text file's hash and resolved target before
+writing. The repeated Apply checks idempotence. The default Audit only writes a
+redacted findings report. The tests use disposable files to check race refusal,
+restoration, new plugin-version discovery, and preservation of distinct skills.
+
+### Files and real output
+
+The command, Python implementation, stdio RPC client, tests, README, reports,
+and timestamped backup manifests are installed under
+`C:\Users\dangv\.codex\maintenance\import-cleanup`, outside skill discovery.
+The script discovers runtime and plugin paths each time and requires no package
+installation. It adds no scheduled task or background watcher.
+
+- Initial Apply changed one configuration array and 15 instruction files.
+- A follow-up repaired a pre-existing assumption that every runtime exposes SQL
+  task tables in one skill and one planner definition. It preserves task status
+  and dependencies using the available tracker or a checklist in the plan.
+- The final Apply printed `changes: 0`.
+- In total, 19 duplicate skills were disabled: 2 old PR-comment skills,
+  7 overlapping Matt Pocock skills, and 10 nested Vercel entries. Their preferred
+  personal/wrapper counterparts remained enabled. No skill files were deleted.
+- The desktop runtime is `0.159.2`; the managed CLI is `0.160.0`. Skill discovery
+  passed for all eight roots in both runtimes. Neither disabled plugin appeared
+  in fresh runtime hook lists; retained hooks remained trusted.
+- All 43 imported thread IDs, their source hashes in the import ledger, and
+  existing source-file hashes were preserved across Apply. Conversation bodies
+  were not read or copied. `docs/roadmap.md` retained its initial hash.
+- GitNexus accepted a harmless `git status` hook fixture. All five retained Vercel
+  hook modules loaded, and parser fixtures passed without invoking their main
+  functions, telemetry senders, or cleanup actions against real sessions.
+
+### Troubleshooting and remaining limits
+
+- A generated `__pycache__` file initially made the PR-comment skill copies look
+  different. Their actual scripts and metadata match; the comparison now ignores
+  generated Python bytecode.
+- Windows stores imported thread paths with a `\\?\` prefix. Comparing raw
+  strings falsely reported different destinations. Canonical comparison handles
+  that prefix and UNC paths; a disposable test covers it.
+- A sandbox write to the maintenance report directory was denied. The approved
+  host-visible route saved the report successfully.
+- Static reference scanning found `scripts/run.py`, `references/finance.md`, and
+  `references/sales.md` in the skill-authoring examples. These are illustrative
+  examples, not missing dependencies, so they were preserved.
+- Another active task removed five imported skills, five imported agent files,
+  and the project MCP configuration in the main `dangvngiang.dev` checkout.
+  This audit did not recreate them. The Supabase project binding therefore
+  cannot be confirmed in the effective configuration and remains open.
+- Claude's subagent tool allowlists were omitted by import. Existing role prose,
+  inherited models, and permissions were preserved; equivalent tool-level
+  enforcement is not claimed.
+- Other tasks changed seeder files and appended Step 12 during this audit.
+  Those changes were left intact. This audit changed this repository's imported
+  `AGENTS.md` plan pointer and added its own documentation sections only.
+- The user explicitly deferred a Codex restart because other tasks are active.
+  Existing sessions can retain Warp hooks and open replacement windows. A normal
+  synchronization and persistence check remain outstanding.
+
+### Rollback and future imports
+
+```powershell
+& $cleanup -Mode Restore -Backup '<run-directory>\manifest.json' -WhatIf
+& $cleanup -Mode Restore -Backup '<run-directory>\manifest.json'
+```
+
+Restore successive repair runs in reverse order. Restore refuses to overwrite
+later edits or a changed junction. Restoring the original popup-fix backup would
+re-enable Warp, so only do that deliberately. After future imports or plugin
+updates, run Audit and inspect Apply -WhatIf. Keep synchronization enabled.
+When other Codex tasks are idle, restart the relevant runtime, observe a normal
+synchronization, and repeat Audit and Apply to complete persistence verification.
+
+Controls and protocol:
+[skill overrides](https://learn.chatgpt.com/docs/build-skills),
+[native configuration and import API](https://learn.chatgpt.com/docs/app-server).
 
 ## Step 13: Isolated S verification (2026-10-03)
 
