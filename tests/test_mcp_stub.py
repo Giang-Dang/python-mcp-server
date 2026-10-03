@@ -7,7 +7,9 @@ import asyncio
 import psycopg
 import pytest
 from fastmcp import Client
+from sqlalchemy import func, select
 
+from mcp_server.db import engine_for
 from mcp_server.server import mcp
 from shopdb.db import connect
 
@@ -56,3 +58,10 @@ def test_the_role_behind_the_server_cannot_write():
         conn.execute("SET default_transaction_read_only = off")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("UPDATE shop.products SET name = name WHERE product_id = 1")
+
+
+def test_the_server_engine_connects_as_the_role_it_was_asked_for():
+    for role in ("mcp_reader", "mcp_writer"):
+        with engine_for(role).connect() as conn:
+            assert conn.execute(select(func.current_user())).scalar_one() == role
+    assert engine_for("mcp_reader") is engine_for("mcp_reader"), "one pool per role"
