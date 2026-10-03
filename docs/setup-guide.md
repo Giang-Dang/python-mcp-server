@@ -445,3 +445,306 @@ customers and 78,208 orders through row-level security (about 40%); a session wi
 - **splitmix64 hashing** (`mix` in `model.py`): a tiny, fast integer hash with good distribution; used so that "random" choices depend only on the id.
 - **Skewed (Zipf-like) data**: real data is rarely uniform. Here 1% of customers place about 30% of orders, which later breaks query-planner assumptions (P01).
 - **Python multiprocessing on Windows**: https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
+
+---
+
+## Step 4: Indexes, functions, triggers, procedures, statistics, grants
+
+### Goal and why
+
+Turn the loaded data into something that behaves like a real industry database: secondary indexes (some deliberately missing),
+10 kinds of triggers (21 trigger objects), 30 routines (helpers, reports, write procedures, batch jobs, and adversarial traps), fresh
+planner statistics (one table deliberately stale), and a precise list of who may run what.
+
+Why it is a separate layer applied **after** the load (`db/post_load/`, not `db/schema/`):
+- **Indexes** are far cheaper to build once on finished data than to maintain for every row of a 4.6-million-row `COPY`.
+- **Triggers** would fire for every seeded row: writing 4.6 million audit rows, reserving stock for every historic order line, and
+  rewriting `updated_at` on every row. Seeded history must stay as the generator made it.
+- **Procedures** can only be tested against data that exists.
+
+Because triggers now exist, **re-seeding on top of this layer would corrupt the data**. `shopdb seed` therefore refuses to run once any
+trigger exists in schema `shop`. To start over: `docker compose down -v`, `docker compose up -d --wait`, `shopdb seed`, `shopdb post-load`.
+
+Order of the files (the number is the order they run in):
+
+| File | Contents | Why here |
+|---|---|---|
+| `100_indexes.sql` | 28 secondary indexes (137 including per-partition children) | before anything that queries by those columns |
+| `105_functions.sql` | 11 pure helpers, 4 report functions | triggers and procedures call the helpers, so they must exist first |
+| `110_triggers.sql` | 10 trigger kinds on 15 tables, 21 trigger objects | needs the helpers |
+| `130_procedures.sql` | 6 write procedures, 4 batch procedures | needs helpers and triggers (they rely on the triggers firing) |
+| `135_adversarial.sql` | 5 deliberately risky routines | separate file so they are easy to find, and easy to remove |
+| `140_analyze.sql` | `ANALYZE` of every table, the P07 stale-statistics setup, first refresh of the materialized view | after all data-changing steps |
+| `150_grants.sql` | who may EXECUTE which routine | last, because every routine must exist |
+
+### Commands
+
+```powershell
+# Apply everything, or one file at a time with a prefix
+poetry run shopdb post-load
+poetry run shopdb post-load --only 100
+
+# Behaviour tests: run inside one transaction that is rolled back, so no data changes (needs `docker compose`)
+Get-Content tests/sql/step4_checks.sql | docker compose exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1
+#   Git Bash:  MSYS_NO_PATHCONV=1 docker compose exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1 < tests/sql/step4_checks.sql
+
+# Confirm the seeded data is still pristine afterwards
+poetry run shopdb verify --scale S
+```
+
+### What each part does and why it is needed
+
+**`shopdb post-load`** runs each `*.sql` file as the `shop_owner` role, in file-name order, one transaction per file, so a failing file
+leaves nothing half-applied. Every file is re-runnable (`IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP TRIGGER IF EXISTS` first). It runs from Python
+(psycopg) rather than `psql` so it works without `psql` installed on Windows.
+
+**Indexes (`100`).** One per foreign key and common lookup. `orders (tenant_id, placed_at)` exists because row-level security adds
+`tenant_id = <session tenant>` to every query on `orders`. Two partial and composite indexes serve the stock ledger. Left out on purpose:
+P02 (`order_items.product_id`), P04 (no trigram index on product text), P05 (no GIN index on `products.attributes`), P06 (no partial
+indexes on `deleted_at IS NULL`). Building all of them took 1.8 s; the database grew from 741 MB to 889 MB.
+
+**Functions (`105`).** Volatility is declared deliberately: `IMMUTABLE` for pure maths (`calc_tax`), `STABLE` for anything reading settings or
+tables (`current_tenant`, the reports), `VOLATILE` for `random_between`. Reports are `SECURITY INVOKER`, so row-level security limits them to the
+caller's tenant. They are called with `SELECT * FROM shop.monthly_sales_report(2025, 6)`.
+
+**Triggers (`110`)** and why each exists:
+
+| Trigger | Fires | Why it exists / lesson |
+|---|---|---|
+| `trg_touch_updated_at` (11 tables) | BEFORE UPDATE | one generic function reused across tables |
+| `trg_audit` (orders, payments) | AFTER I/U/D | writes `audit_log`. `SECURITY DEFINER` because `mcp_writer` cannot write `audit_log`; records `session_user`, not the definer |
+| `trg_reserve_inventory` | AFTER INSERT on order lines | reserves stock and logs a movement. Popular variants are updated by many orders at once (hot rows, P08) |
+| `trg_validate_inventory` / `_order_status` / `_order_item` | BEFORE | business rules that raise errors with SQLSTATE `23514` |
+| `trg_order_count` | AFTER INSERT/DELETE on orders | denormalized counter; the busiest 1% of customers are updated constantly |
+| `trg_soft_delete_cascade` | AFTER UPDATE OF deleted_at | deleting a customer soft-deletes their orders |
+| `trg_recalc_order_totals` | AFTER INSERT, once per **statement** | uses a *transition table* (`new_rows`): one multi-line `INSERT` triggers one recalculation, not one per line |
+| `trg_carrier_sla` | AFTER UPDATE on shipments | deliberately slow (P13): scans the whole table for every row updated. Measured 8.8 ms per updated row |
+
+Why `SECURITY DEFINER` appears here, and why the `SET search_path` line is not optional: a definer function runs with its owner's rights.
+If it did not pin `search_path`, a caller could create their own object with the same name earlier in their own path and make the
+function call it with owner privileges.
+
+**Procedures (`130`).** The key design decision is *whose rights they run with*:
+- The six **write procedures** are `SECURITY DEFINER`: `mcp_proc_exec` has **no table privileges at all**, so the procedures are its only door
+  into the data. The price: the owner bypasses row-level security, so **every procedure re-implements the tenant check itself**
+  (`tenant_id = shop.current_tenant()`). Forgetting that line in one procedure is the classic bug of this pattern. Cross-tenant requests
+  get the same "customer N not found" message as non-existent ones, so they cannot be used to probe other tenants.
+- `archive_old_orders` is `SECURITY INVOKER` and commits after each batch. Postgres does **not** allow `COMMIT` inside a `SECURITY DEFINER`
+  procedure or one with a `SET` clause. It must also be called with autocommit on; inside an explicit transaction it fails with SQLSTATE `2D000`
+  "invalid transaction termination" (verified below, and it left no data behind).
+
+**Adversarial routines (`135`), each proven by a test to misbehave as intended:**
+
+| Routine | Trap | Evidence |
+|---|---|---|
+| `get_next_invoice_number()` | name says "get", effect is a write (advances a sequence, which a rollback does not undo) | sequence went 183358 to 183360 across a rolled-back savepoint |
+| `search_orders(p_filter)` | string-concatenated dynamic SQL, running as the owner | a tenant-1 session saw all 5 tenants' orders; an injected subquery returned 32,223 tenant-2 rows |
+| `warm_cache(n)` | sleeps; tests timeouts | cancelled by `statement_timeout` |
+| `order_snapshot(id, OUT, OUT, INOUT cursor)` | result is OUT parameters plus an open cursor, not a table | read with `FETCH` in the same transaction |
+| `bulk_update_prices(percent, category)` | with no category, rewrites every product price as the owner | not run (it would change data); documented |
+
+**Statistics (`140`).** `ANALYZE` gives the planner the value distributions it needs. P07 is built in three steps: (1) switch autovacuum off for `carts`,
+otherwise Postgres would quietly repair the problem; (2) `ANALYZE` it while about 20% of carts are `open`; (3) run a "status migration" that makes
+95% `open`. Result: the plan says `rows=33722` but the scan returns `actual rows=95972`. The estimate is higher than the 20% I predicted because the update
+roughly doubled the table's size, and Postgres scales its row estimate from the table size. Side effects of that migration, worth knowing:
+every cart's `updated_at` moved to today (the `updated_at` trigger fired), and the table is now 21 MB with a lot of dead rows (bloat).
+
+**Grants (`150`).** First `REVOKE EXECUTE` from everyone, then grant by role. The grants are **deliberately broader than what the MCP server should allow**,
+as in many real databases; the server's own allowlist (next phase) is the narrower gate:
+
+| Role | May EXECUTE | Count |
+|---|---|---|
+| `mcp_reader` | pure helpers, 4 reports, `order_snapshot` | 16 |
+| `mcp_writer` | pure helpers, 4 reports, `archive_old_orders` (it holds the table rights that invoker procedure needs) | 16 |
+| `mcp_proc_exec` | helpers, 6 write procedures, 3 owner-run batch procedures, 4 adversarial routines | 24 |
+
+### Files created
+
+`db/post_load/100_indexes.sql`, `105_functions.sql`, `110_triggers.sql`, `130_procedures.sql`, `135_adversarial.sql`, `140_analyze.sql`,
+`150_grants.sql`; `src/shopdb/postload.py` (the runner and the "triggers exist" check); the `post-load` CLI command; the seed guard in
+`loader.py`; `tests/sql/step4_checks.sql` (37 behaviour checks).
+
+### Expected output
+
+```text
+$ poetry run shopdb post-load
+applied 100_indexes.sql (1.8s)    applied 105_functions.sql (0.0s)    applied 110_triggers.sql (0.0s)
+applied 130_procedures.sql (0.0s) applied 135_adversarial.sql (0.0s)  applied 140_analyze.sql (5.1s)
+applied 150_grants.sql (0.0s)
+7 file(s) applied
+
+$ ... step4_checks.sql
+ PASS | create_order: pending order with 2 lines for the session tenant        | status 1, tenant 1, lines 2
+ PASS | create_order refuses a customer of another tenant                      | customer 12 not found
+ PASS | mcp_writer UPDATE on orders succeeds although it cannot write audit_log (definer trigger)
+ PASS | A2 search_orders leaks other tenants' orders (expected)                | 5 tenants visible to a tenant-1 session
+ PASS | archive_old_orders cannot COMMIT inside an explicit transaction ...    | 2D000 invalid transaction termination
+ PASS | P13 slow trigger: 20 shipment updates took 176 ms (informational)      | 8.8 ms per row
+ passed | failed
+     39 |      0
+```
+
+### Troubleshooting and things that were not obvious
+
+- **No role can create temporary tables.** Step 2 ran `REVOKE ALL ON DATABASE shop FROM PUBLIC`, which also removes the default `TEMP` privilege, so
+  even `shop_owner` gets "permission denied to create temporary tables". That is good least privilege for the MCP roles. It means routines must not
+  rely on temp tables, and test scripts that need them must run as the superuser.
+- **A multi-statement script works in one `psycopg` call**, including `ANALYZE` and `DO` blocks, but the cursor is positioned on the *first*
+  statement's result. Only `conn.execute(text)` plus `commit()` is needed for a file runner.
+- **Test failures that were bugs in the tests, not the database:** an `INOUT` argument to `CALL` inside PL/pgSQL must be a *variable* (not `NULL`); `CALL`
+  does not accept a subquery as an argument; a role that has been switched to cannot read the superuser's temp tables, so read test values into variables
+  *before* `SET ROLE`; and an error caught by an **outer** `EXCEPTION` block rolls back everything recorded inside that block (so each scenario got its own `DO`).
+- **A real bug the tests found:** `update_customer_email` validated the address *before* trimming it, rejecting `'  New@Example.test '` even though it is meant to
+  normalise input. Fixed by trimming and lowercasing first, then validating what is stored.
+- **`statement_timeout` is read when a statement starts.** `SET LOCAL statement_timeout` inside a `DO` block has no effect on that same block. Set it in a
+  separate statement beforehand (the MCP server must do the same).
+- **A scare worth recording:** the log showed `archived batch 1 (10 orders)` from inside the test transaction, which looked as if the procedure's `COMMIT` had saved
+  everything. It had not: the `COMMIT` raised `2D000`, the test caught it, and the batch was rolled back. Row counts afterwards were exactly the seed's. Always check the data
+  after a test that exercises transaction control.
+- **The test run consumes invoice numbers.** Sequences are never rolled back, so each run of the test script advances `invoice_number_seq` by 2. Harmless gaps.
+
+### Known gaps (so they do not surprise you later; several are the point)
+
+1. `order_items` has no tenant column and no RLS: any reader sees every tenant's order lines.
+2. `mv_daily_sales` (a materialized view) cannot have RLS and is built as the owner: any reader sees every tenant's daily revenue.
+3. **Tenant isolation rests on a client-settable session value.** Any session can run `SET app.tenant_id = '2'`. The MCP server must forbid `SET` in raw SQL and set the
+   tenant itself on connect. A SQL-capable client plus a custom setting is not a security boundary on its own.
+4. Definer procedures bypass RLS. The tenant checks in them are hand-written, and `search_orders` shows what happens without them.
+5. Roles are granted more routines than the MCP server should expose (see Grants).
+6. The seeded `inventory_movements` ledger is synthetic, so `cancel_order` on a seeded order may release stock for a "sale" that never really reserved it.
+7. `shopdb verify` describes a **freshly seeded** database. After real use of the procedures, row counts and the order window will no longer match.
+
+### Concepts
+
+- **Triggers and transition tables**: https://www.postgresql.org/docs/17/sql-createtrigger.html and https://www.postgresql.org/docs/17/plpgsql-trigger.html
+- **Function volatility** (IMMUTABLE / STABLE / VOLATILE): https://www.postgresql.org/docs/17/xfunc-volatility.html
+- **SECURITY DEFINER and writing it safely** (pin `search_path`): https://www.postgresql.org/docs/17/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY
+- **Procedures and transaction control** (why `COMMIT` is restricted): https://www.postgresql.org/docs/17/plpgsql-transactions.html
+- **ANALYZE and planner statistics; autovacuum**: https://www.postgresql.org/docs/17/sql-analyze.html and https://www.postgresql.org/docs/17/routine-vacuuming.html
+- **Default privileges and `REVOKE ... FROM PUBLIC`**: https://www.postgresql.org/docs/17/sql-alterdefaultprivileges.html
+- **Why a rolled-back sequence stays advanced**: sequences are non-transactional by design: https://www.postgresql.org/docs/17/functions-sequence.html
+
+---
+
+## Step 4b: Rebuild from scratch (the clean-start flow)
+
+### Goal and why
+
+Prove that the documented path from nothing to a finished database works end to end, and start the next phase from a database with no leftovers from
+test runs (advanced sequences, an advanced invoice number). This is also the only way to re-seed once triggers exist, so it is worth having run once.
+
+Alternatives considered: `shopdb reset` (truncate and re-seed) is not possible any more, because the seeder refuses to run while triggers exist. Dropping only the
+triggers by hand would be fragile. Recreating the volume is simple and deterministic: same seed, same data.
+
+### Commands
+
+```powershell
+docker compose down -v                    # DESTRUCTIVE: deletes the pgdata volume. Only this project's volume (shopdb_pgdata).
+docker compose up -d --wait               # init scripts run: extensions, roles, schema (about 6 s)
+poetry run shopdb seed --scale S          # about 25 s
+poetry run shopdb verify --scale S        # 39 checks, valid only before the procedures are used
+poetry run shopdb post-load               # about 7 s
+poetry run pytest -q                      # 11 tests
+Get-Content tests/sql/step4_checks.sql | docker compose exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1
+```
+
+### What each command does and why
+
+- `down -v` removes the container, the network and (because of `-v`) the named volume that holds all the data. Nothing outside the project is touched; `.env` and the
+  source tree are not part of the volume. Docker re-runs the init scripts only because the volume is empty afterwards.
+- The order matters: schema (empty tables) -> seed (no triggers, no secondary indexes) -> post-load (indexes, triggers, procedures, statistics, grants).
+- `verify` runs between seed and post-load on purpose: it describes the data exactly as generated, before any procedure can change it.
+
+### Expected output (from the real run)
+
+```text
+Volume shopdb_pgdata Removed
+Container shopdb-db-1 Healthy                  (6 s)
+Done: 4,630,316 rows in 24.9s                  (identical row count to the first load: the seed is deterministic)
+39 passed, 0 failed                            (shopdb verify)
+applied 100_indexes.sql (1.8s) ... applied 150_grants.sql (0.0s)    7 file(s) applied
+11 passed                                      (pytest)
+ passed | failed
+     39 |      0                               (step4_checks.sql)
+```
+
+### Troubleshooting and things worth knowing
+
+- `shopdb seed --force` after post-load prints "Triggers exist in schema shop ..." and exits 1. That is the guard working, not an error to work around.
+- `tests/sql/step2_checks.sql` check 10 inserts tenants 1 and 2, so on a seeded database it stops with `duplicate key ... tenants_pkey`. It is meant for an empty database
+  (checks 1-9 still run). Use `tests/test_seed_integrity.py` for row-level security against real data.
+- The whole rebuild takes under a minute on this machine at profile S. Profile M has not been run.
+
+---
+
+## Step 6: Profile M (105 million rows)
+
+### Goal and why
+
+Replace the small S dataset with the large one, so the planted problems and the guarded SQL server are tested against data that is big enough
+to hurt: 5 million orders, 15 million order lines, 30 million audit rows, a 19 GB database.
+
+Why it needed a rebuild and not an upgrade: the seed only works on an empty database, and post-load triggers exist, so the only way from S to M is
+a fresh volume (`down -v`, which deletes the S data; S is reproducible in about a minute, so nothing was lost). M uses the same code, the same tables and the same
+seed as S: only the counts in `src/shopdb/config.py` change.
+
+Why a background job: the seed takes about 5 minutes and the foreground limit is 10, so the long commands ran in the background and were checked when they finished.
+
+Alternatives considered: running M on top of S (impossible, see above); lowering the data volume to make it faster (defeats the purpose).
+
+### Commands
+
+```powershell
+docker compose down -v                                  # S data deleted (the volume shopdb_pgdata)
+docker compose up -d --wait
+poetry run shopdb seed --scale M --confirm-large --workers 12     # about 5 minutes
+poetry run shopdb verify --scale M                      # 45 seconds, 39 checks
+poetry run shopdb post-load                             # about 100 seconds
+# point the local .env at M so verify and the integration tests follow it
+#   SHOP_SCALE=M       (the file is git-ignored)
+poetry run pytest -q                                    # 46 seconds at M
+Get-Content tests/sql/step4_checks.sql | docker compose exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1
+Get-Content db/observability/table_sizes.sql | docker compose exec -T db psql -U postgres -d shop
+```
+
+### What each part does and why it is needed
+
+- `--confirm-large` is a deliberate speed bump on the CLI; it stops an accidental M seed.
+- `--workers 12`: Postgres handles many concurrent `COPY` streams, and the machine has 28 CPUs. 12 was chosen over S's 8 to use more of them; more than that gains little because
+  commits and WAL are shared.
+- `SHOP_SCALE=M` in `.env`: `shopdb verify` and the integration tests read their expected row counts from the active profile. If they disagree with the database, they fail.
+- `table_sizes.sql` is a repeatable way to record sizes instead of ad-hoc queries; the numbers go into `docs/size-profiles.md`.
+
+### Files created
+
+`docs/size-profiles.md` (all measurements and caveats); `db/observability/table_sizes.sql`; small wording updates in `README.md`, `CLAUDE.md` and the `seed` CLI message (they still said
+"potentially hours" and "10-15 GB").
+
+### Expected output
+
+```text
+Planning orders for scale M (seed 42) ...
+  planned 5,000,000 orders -> 14,998,089 lines, 5,286,765 payments (14.9s)
+...
+Done: 104,756,389 rows in 307.4s
+39 passed, 0 failed                                         (verify, 45 s)
+applied 100_indexes.sql (57.7s)  ...  applied 140_analyze.sql (40.9s)   7 file(s) applied
+11 passed in 46.01s                                         (pytest)
+ passed | failed
+     39 |      0                                            (behaviour tests, 18 s)
+```
+
+### Troubleshooting and things that were not obvious
+
+- **The size surprised me.** I estimated 8-10 GB and the database is 19 GB (24 GB on disk with 4.1 GB of WAL). `audit_log` alone is 7 GB because each row carries two JSONB documents.
+- **The time surprised me in the good direction.** I estimated 1-3 hours, then 10-15 minutes. The real seed took 5 minutes. The planning pass and the chunk-independent design are why.
+- **`table_sizes.sql` first showed `audit_log` as 0 bytes.** A partitioned table stores nothing itself; its data is in the 37 partitions. The script now sums the partitions.
+- **A trigger that is cheap at S is expensive at M.** The deliberately slow shipment trigger went from 8.8 ms to 310 ms per updated row (35x slower for 25x the rows), because each call scans a table that grew.
+- **Warm cache hides a lot.** Docker's VM has 47 GB of RAM, so even the "bad" queries finish in under a few seconds. See the caveat in `docs/size-profiles.md`.
+- **Disk:** the data directory is 24 GB. Keep 30+ GB free in Docker's virtual disk before rebuilding M.
+
+### Concepts
+
+- **Cardinality estimation and skew**: the planner assumes values are spread evenly. https://www.postgresql.org/docs/17/planner-stats.html
+- **Buffer cache vs OS page cache**: https://www.postgresql.org/docs/17/runtime-config-resource.html#GUC-SHARED-BUFFERS
+- **Write-ahead log (`pg_wal`) and `max_wal_size`**: https://www.postgresql.org/docs/17/wal-configuration.html

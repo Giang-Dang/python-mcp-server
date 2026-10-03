@@ -43,7 +43,7 @@ def seed_command(
     chosen = get_scale(scale or settings.shop_scale)
     if chosen.name == "M" and not confirm_large:
         typer.echo(
-            "Scale M loads about 10-15 GB and can take hours. Re-run with --confirm-large if you mean it."
+            "Scale M loads about 105 million rows (a 19 GB database) and took about 5 minutes with 12 workers on a 28-CPU machine. Re-run with --confirm-large if you mean it."
         )
         raise typer.Exit(2)
     try:
@@ -79,6 +79,23 @@ def verify(
     typer.echo(f"\n{len(results) - failed} passed, {failed} failed")
     if failed:
         raise typer.Exit(1)
+
+
+@app.command("post-load")
+def post_load_command(
+    only: str = typer.Option(
+        None, "--only", help="Apply only files whose name starts with this prefix, e.g. 100."
+    ),
+) -> None:
+    """Apply db/post_load/*.sql (indexes, functions, triggers, procedures, statistics, grants) as shop_owner."""
+    from .postload import apply_post_load
+
+    try:
+        count = apply_post_load(only=only, log=typer.echo)
+    except RuntimeError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
+    typer.echo(f"{count} file(s) applied")
 
 
 @app.command()
