@@ -135,6 +135,24 @@ Error categories are `authentication`, `policy_rejection`, `invalid_arguments`,
 and `uncertain_completion`. HTTP authentication failures use HTTP 401.
 Driver errors and credentials are withheld from tool responses.
 
+## Resources, prompts and discovery
+
+Three packaged Markdown resources and two read-oriented prompts share the tools'
+identity/session protection. See [MCP discovery and client usage](mcp-discovery.md)
+for inventories, argument limits, SDK examples and how the host connects an LLM.
+Documentation reads and prompt renders start no database operation and create no
+audit rows. Database tools retain mandatory intent/outcome auditing. Retrieving a
+prompt does not execute SQL or approve mutations.
+
+Automated guidance acceptance is in the [implementation plan](mcp-resources-prompts-plan.md).
+The user confirmed manual acceptance of the new interfaces: "I checked, it worked".
+This result is user-reported; per-method UI responses were not captured. Optional
+LLM-host context inclusion remains unverified.
+The isolated runtime was restarted with guidance installed; protected-resource
+discovery returned 200 and unauthenticated resource discovery returned 401.
+No browser surface was available to the assistant; the user completed the check. See
+[setup-guide Step 18](setup-guide.md#step-18-load-resources-and-prompts-client-acceptance-preflight-2026-10-03).
+
 ## Limits and approval
 
 | Limit | Default |

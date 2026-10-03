@@ -1787,3 +1787,140 @@ docker compose -f tests/compose.yml exec -T db psql -U postgres -d shop -Atc "se
 
 - **MCP elicitation** (the server asks the client to ask the human): https://modelcontextprotocol.io/specification/draft/client/elicitation
 - **Append-only audit with intent events**: the commit intent is recorded *before* the commit, so a crash leaves evidence rather than silence (see `docs/guarded-server.md`, "Inspect audit and uncertain operations").
+
+## Step 18: Load resources and prompts; client acceptance preflight (2026-10-03)
+
+### Goal and why
+
+Load the new packaged guidance into the existing authenticated runtime so Inspector
+can discover nine tools, three resources and two prompts. An existing Python process
+does not automatically reload these registrations. The verified runtime uses the
+isolated PostgreSQL instance on port 55439. Inspector is reused with its existing
+catalog and SSE hook from Step 16.
+
+Alternatives rejected: starting a second server would conflict on port 8000; a
+plain new Inspector process would omit the working hook; the live database on
+5433 is outside this acceptance scope. Reinstalling dependencies was unnecessary:
+the existing virtual environment works even though the Poetry launcher fails.
+
+### Preflight commands and observations
+
+From `F:\repo\python-mcp-server`:
+
+```powershell
+Select-String -Path .env.mcp -Pattern '^SHOPMCP_POSTGRES_PORT='
+Get-NetTCPConnection -LocalPort 8000,6274 -State Listen |
+    Select-Object LocalAddress,LocalPort,OwningProcess
+Get-CimInstance Win32_Process -Filter 'ProcessId=19016' |
+    Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress
+Get-NetTCPConnection -OwningProcess 19016 |
+    Select-Object LocalPort,RemotePort,State | ConvertTo-Json -Compress
+```
+
+The first command prints only the nonsecret database port: **55439**. The host-level
+process queries identified `127.0.0.1:8000` owned by PID **19016**, and Inspector on
+`127.0.0.1:6274` owned by PID **67792**. PID 19016's exact command was
+`"F:\repo\python-mcp-server\.venv\Scripts\python.exe" -m mcp_server.cli serve`.
+Its PostgreSQL connections targeted **55439**. Process IDs are this run's evidence,
+not stable values to copy into a future restart.
+
+### Restart command actually run
+
+```powershell
+$runtimeCommand = (Get-CimInstance Win32_Process -Filter 'ProcessId=19016').CommandLine
+if ($runtimeCommand -ne '"F:\repo\python-mcp-server\.venv\Scripts\python.exe" -m mcp_server.cli serve') {
+    throw 'Runtime changed; refusing to stop an unidentified process.'
+}
+$env:SHOPMCP_POSTGRES_PORT='55439'
+Remove-Item Env:SHOPMCP_MIGRATION_URL -ErrorAction SilentlyContinue
+Stop-Process -Id 19016 -ErrorAction Stop
+$guidanceRuntime = Start-Process `
+    -FilePath 'F:\repo\python-mcp-server\.venv\Scripts\python.exe' `
+    -ArgumentList @('-m','mcp_server.cli','serve') `
+    -WorkingDirectory 'F:\repo\python-mcp-server' -WindowStyle Hidden `
+    -RedirectStandardOutput 'F:\repo\python-mcp-server\.scratch\guidance-server.out.log' `
+    -RedirectStandardError 'F:\repo\python-mcp-server\.scratch\guidance-server.err.log' -PassThru
+$guidanceRuntime.Id | Set-Content -LiteralPath 'F:\repo\python-mcp-server\.scratch\guidance-server.pid'
+Write-Output "Started isolated guidance runtime PID $($guidanceRuntime.Id)"
+```
+
+The command rechecks the identified process before stopping it, pins the test port,
+removes any migration-owner environment variable, and starts the runtime hidden.
+Runtime passwords continue to come from the existing ignored `.env.mcp`; no secret
+was copied into source or documentation. Inspector was not restarted.
+
+Real output: `Started isolated guidance runtime PID 15460`. The virtual-environment
+launcher spawned the actual server process **77020**. Its startup log reported:
+
+```text
+Starting MCP server 'shop-db' with transport 'http' on http://127.0.0.1:8000/mcp
+Started server process [77020]
+Application startup complete.
+Uvicorn running on http://127.0.0.1:8000
+```
+
+Ignored runtime files created: `.scratch/guidance-server.out.log`,
+`.scratch/guidance-server.err.log`, `.scratch/guidance-server.pid`.
+Feature source, tests and documentation are listed in
+[the implementation plan](mcp-resources-prompts-plan.md).
+
+### HTTP checks actually run
+
+```powershell
+@'
+import urllib.request
+for url in ('http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp', 'http://localhost:6274'):
+ try:
+  with urllib.request.urlopen(url, timeout=3) as response:
+   print(url, response.status)
+ except Exception as exc:
+  print(url, type(exc).__name__, str(exc))
+req = urllib.request.Request('http://127.0.0.1:8000/mcp', data=b'{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}', headers={'Content-Type':'application/json','Accept':'application/json, text/event-stream'}, method='POST')
+try:
+ urllib.request.urlopen(req, timeout=3)
+except urllib.error.HTTPError as exc:
+ print('Unauthenticated resources/list:', exc.code)
+'@ | .\.venv\Scripts\python.exe -
+Get-Content .scratch/guidance-server.err.log | Select-Object -Last 12
+```
+
+Real output: protected-resource discovery **200**, existing Inspector page **200**,
+unauthenticated `resources/list` **401**. These checks prove reachability and
+authentication rejection, not authenticated Inspector resource/prompt acceptance.
+No SQL tool or procedure was called by this step.
+
+### Automated verification and actual failures
+
+The database-independent suite passed: **170 passed, 48 deselected in 45.82s**.
+Ruff check passed and **139 files** were already formatted. The documented SDK
+helper returned `{'tools': 9, 'resources': 3, 'prompts': 2}` with a legacy in-process
+client. These automated results use injected services/controlled JWT keys; they
+are separate from the real-tenant UI walkthrough.
+
+| Failure encountered | Resolution or remaining limitation |
+|---|---|
+| Poetry reported `Failed to canonicalize script path` | Used the existing `.venv/Scripts/python.exe -m pytest` and `-m ruff`; no installation or dependency change. |
+| Existing pytest cache and host temporary directory denied access (WinError 5) | Used `-o cache_dir=.scratch/pytest-cache` and `PYTEST_DEBUG_TEMPROOT=F:\repo\python-mcp-server\.scratch`. |
+| Ordinary process inspection reported `Get-CimInstance: Access denied` | Read-only host-level queries succeeded; the exact process and isolated connections were verified before restart. |
+| FastMCP masked missing required prompt SQL with a generic error | Prompt argument middleware now returns a sanitized `sql is required` error. Tests passed. |
+| Computer-use inventory contained no enabled browsers; opening Inspector returned `Browser is not available: iab` | The user performed the manual check and confirmed it worked. The assistant did not independently observe the UI. |
+
+### Manual acceptance: confirmed by the user
+
+After the restart and the request for manual results, the user confirmed:
+"I checked, it worked". This completes
+[T12](mcp-resources-prompts-plan.md#t12-perform-and-record-manual-acceptance)
+as user-reported manual client acceptance. The requested walkthrough covered the
+9/3/2 inventories, three resource reads, both schema prompt variants, the slow-query
+prompt and argument errors. The confirmation did not include per-method responses,
+screenshots or a negotiated protocol, so those details are not claimed as separately
+observed. The automated checks above provide detailed behavioral evidence.
+Optional LLM-host context inclusion remains unverified and is separate from the
+required manual client acceptance.
+
+### Concepts
+
+- [MCP resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources): listing metadata and reading content are separate operations.
+- [MCP prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts): retrieval renders messages for the host/user to use.
+- [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle): legacy initialization negotiates capabilities, not counts.
+- [FastMCP middleware](https://gofastmcp.com/servers/middleware): identity/session checks span all MCP surfaces.

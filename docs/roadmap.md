@@ -10,6 +10,15 @@ The authenticated Streamable HTTP endpoint is `http://127.0.0.1:8000/mcp`.
 Tools: `ping`, `list_tables`, `describe_table`, `query`, `execute`,
 `explain`, `list_procedures`, `call_procedure`, and `diagnostics`.
 
+Guidance includes three Markdown resources (`shop://guide/schema`,
+`shop://guide/relationships`, `shop://policy/sql`) and two prompts (`explore_schema`,
+`investigate_slow_query`). They render packaged text without database access,
+share identity/session protection and have separate text/argument byte budgets.
+The policy reports instance limits. Discovery and guidance retrieval are metadata
+operations; database operations retain mandatory auditing. See
+[mcp-discovery.md](mcp-discovery.md) and the
+[small-task implementation plan](mcp-resources-prompts-plan.md).
+
 All verified callers have the same access. Identity is used for sessions,
 approvals, and auditing. The configured tenant is initially 1; the fixture still
 exposes cross-tenant data through some tables, views, and owner procedures.
@@ -94,6 +103,17 @@ statements, pg_sleep), a declined and an approved UPDATE, and an approved
 Still not verified by hand: the exact approval prompt text was not captured, a
 multi-batch partial commit was not exercised through Inspector (automated tests
 cover it), and nothing was run against the live database on port 5433.
+
+Resource/prompt automation uses database-independent renderer/client tests and
+controlled-authenticated HTTP tests. Manual Inspector acceptance of the new
+resources/prompts is complete based on the user's confirmation: "I checked, it worked".
+Per-method client responses and the negotiated protocol were not supplied. Optional
+LLM-host context inclusion remains unverified separately.
+The new default suite passed **170 tests**, with 48 database tests deselected;
+Ruff and formatting passed. Setup-guide Step 18 records a successful isolated
+runtime restart and HTTP preflight. The assistant could not perform UI acceptance
+because computer-use exposed no browser surface; the user performed the manual
+check. No SQL mutation was run by the assistant for this feature's acceptance.
 
 The initial release does not include an audit UI, background jobs, arbitrary
 routine execution, unreviewed SQL extensions, or automatic recovery of incomplete
