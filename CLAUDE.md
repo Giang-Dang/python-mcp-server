@@ -30,6 +30,7 @@ poetry run shopdb seed --scale S      # load data (S default, M for the big prof
 poetry run shopdb verify              # seed checks (valid only on a freshly seeded database)
 poetry run shopdb post-load           # indexes, functions, triggers, procedures, ANALYZE, grants (db/post_load)
 poetry run pytest                     # smoke tests
+poetry run fastmcp dev src/mcp_server/server.py   # MCP stub (ping, list_tables) in the Inspector
 .\db\workload\run.ps1 -Scenario browse|orders|hot|deadlock|mixed   # pgbench load, rolled back unless -Commit
 poetry run ruff check . ; poetry run ruff format .
 ```
