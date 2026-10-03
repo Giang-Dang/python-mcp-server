@@ -1,0 +1,9 @@
+# Keep LF endings for files that run inside Linux containers or psql.
+*.sql   text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.py    text eol=lf
+*.ps1   text eol=crlf

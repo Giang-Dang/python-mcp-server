@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets and local config
+.env
+
+# Local data and logs
+*.log
+pgdata/

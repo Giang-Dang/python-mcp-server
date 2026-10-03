@@ -1,0 +1,58 @@
+# Postgres 17 for the 'shop' test database.
+#
+# Init scripts in ./db/init run ONCE, the first time the data volume is empty:
+#   000_extensions.sql  -> extensions (pg_stat_statements, pg_trgm)
+#   001_roles.sql       -> roles, schema, default privileges (passwords come from .env)
+#   010_schema.sh       -> applies every file in ./db/schema in order
+# To re-run them you must delete the volume (see docs/setup-guide.md, step 2).
+
+name: shopdb
+
+services:
+  db:
+    image: postgres:17
+    env_file: .env # POSTGRES_USER/PASSWORD/DB for the image, plus role passwords for init scripts
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    shm_size: 512mb # parallel query uses /dev/shm; Docker's default is only 64 MB
+    mem_limit: 4g # smaller than the M dataset on purpose, so reads hit the disk like production
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=50
+      - -c
+      - max_wal_size=4GB # fewer checkpoints during bulk loads
+      - -c
+      - shared_preload_libraries=pg_stat_statements,auto_explain
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - auto_explain.log_min_duration=1s
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=1s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/schema:/db/schema:ro
+      - ./db/post_load:/db/post_load:ro
+    healthcheck:
+      # -h 127.0.0.1 forces TCP. During first-time init Postgres runs a temporary server that
+      # listens on the Unix socket only; without -h this check would pass too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  pgdata:

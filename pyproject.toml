@@ -1,0 +1,37 @@
+[project]
+name = "python-mcp-server"
+version = "0.1.0"
+description = "A realistic Postgres test database and a guarded-SQL MCP server built to learn MCP."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "faker>=30.0",
+    "typer>=0.12",
+    "pydantic-settings>=2.4",
+    "fastmcp>=2.0",
+]
+
+[project.scripts]
+shopdb = "shopdb.cli:app"
+
+[tool.poetry]
+packages = [
+    { include = "shopdb", from = "src" },
+    { include = "mcp_server", from = "src" },
+]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"
+ruff = ">=0.6"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
