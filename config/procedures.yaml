@@ -1,0 +1,104 @@
+# Reviewed PostgreSQL 17 definitions from db/post_load/130_procedures.sql.
+# SHA-256 of pg_get_functiondef with LF line endings; update only after review.
+version: 1
+procedures:
+  - name: create_order
+    signature: shop.create_order(bigint,bigint[],integer[],bigint)
+    definition_hash: 455ca36bc3f19a61c5c601ff3d11620e91fb1f1be594b42e44fa799dd8afae69
+    effects: "Creates an order, lines and payment for the configured tenant; triggers reserve stock and add audit rows."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_customer_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+      - {"name":"p_variant_ids","type":"bigint[]","minimum":1,"maximum":9223372036854775000,"max_length":100}
+      - {"name":"p_quantities","type":"integer[]","minimum":1,"maximum":1000,"max_length":100}
+      - {"name":"p_order_id","type":"bigint","required":false,"default":null,"nullable":true,"server_controlled":true}
+  - name: cancel_order
+    signature: shop.cancel_order(bigint)
+    definition_hash: 298ca8f03d859d945505da27c9950ead9ac62056a034d79aaccb867ec81b271b
+    effects: "Cancels one tenant order, releases stock, fails pending payments and adds refunds."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_order_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+  - name: refund_order
+    signature: shop.refund_order(bigint,numeric,text)
+    definition_hash: 6815d32eb07262cab73e06bb4fbdf646118d06d521e3e6164f1e3921fcd19a50
+    effects: "Refunds a delivered tenant order; may update payment and order status."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_order_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+      - {"name":"p_amount","type":"numeric","required":false,"default":null,"nullable":true,"minimum":0.01,"maximum":1000000}
+      - {"name":"p_reason","type":"text","required":false,"default":"customer request","max_length":500}
+  - name: adjust_inventory
+    signature: shop.adjust_inventory(smallint,bigint,integer)
+    definition_hash: a02ad1395705d9f40de07ed27efc74c0ae14661bd60ace8334ec18d76bedfc8f
+    effects: "Changes shared inventory stock and inserts an inventory movement; affects shared stock across tenants."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_warehouse_id","type":"smallint","minimum":1,"maximum":32767}
+      - {"name":"p_variant_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+      - {"name":"p_delta","type":"integer","minimum":-1000,"maximum":1000}
+  - name: update_customer_email
+    signature: shop.update_customer_email(bigint,text)
+    definition_hash: 83871b9a840e6b917edbe73e9ddba7e8c3772edf7a7814a5f1a2cfc26a2dc94f
+    effects: "Changes one active tenant customer's email; triggers may add audit rows."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_customer_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+      - {"name":"p_new_email","type":"text","max_length":254}
+  - name: apply_discount
+    signature: shop.apply_discount(bigint,numeric)
+    definition_hash: 24b15d02f44beb2be96e381731bd844c6f401108a33d8b8c9ba198a1e137049a
+    effects: "Discounts one pending or held tenant order; updates total and audit rows."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_order_id","type":"bigint","minimum":1,"maximum":9223372036854775000}
+      - {"name":"p_percent","type":"numeric","minimum":0,"maximum":50}
+  - name: archive_old_orders
+    signature: shop.archive_old_orders(date,integer,integer)
+    definition_hash: c5a72128369da77f60460a9971f8e2911946681e61f187928491d37328a05f22
+    effects: "Soft-deletes finished tenant orders in internally committed batches. Failure or cancellation can leave earlier batches committed."
+    timeout_seconds: 60
+    role: mcp_writer
+    transaction_mode: autocommit_batches
+    parameters:
+      - {"name":"p_before","type":"date"}
+      - {"name":"p_batch_size","type":"integer","required":false,"default":5000,"minimum":1,"maximum":5000}
+      - {"name":"p_max_batches","type":"integer","required":false,"default":10,"minimum":1,"maximum":10}
+  - name: recalc_customer_tiers
+    signature: shop.recalc_customer_tiers()
+    definition_hash: 5e280e964e09b8c4b4a08c90a9efc2c5d334e3bd1fcf6dc74ff24deb5873ce95
+    effects: "Repairs customer order counts and tiers across ALL tenants; full-table maintenance."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters: []
+  - name: rebuild_daily_aggregates
+    signature: shop.rebuild_daily_aggregates()
+    definition_hash: 645003907e33aa0a91926226b8a9aca2dd560bad2527beb16b6814c9b117787c
+    effects: "Refreshes the daily-sales materialized view across ALL tenants; can lock the view."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters: []
+  - name: purge_abandoned_carts
+    signature: shop.purge_abandoned_carts(integer,bigint)
+    definition_hash: a2815bd6cb9fa3039c27017b467cf8944c3e81ba23ca5d1689aca9bb873e3d55
+    effects: "Deletes abandoned carts across ALL tenants, returning the direct deleted count; no ordinary DML row cap."
+    timeout_seconds: 60
+    role: mcp_proc_exec
+    transaction_mode: atomic
+    parameters:
+      - {"name":"p_older_than_days","type":"integer","required":false,"default":90,"minimum":7,"maximum":36500}
+      - {"name":"p_deleted","type":"bigint","required":false,"default":0,"minimum":0,"server_controlled":true}

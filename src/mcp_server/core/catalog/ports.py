@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class CatalogDatabase(Protocol):
+    async def list_tables(self) -> list[dict]: ...
+    async def describe_table(self, name: str) -> dict: ...
