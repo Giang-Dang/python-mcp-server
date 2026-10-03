@@ -69,7 +69,7 @@ EXPLAIN (ANALYZE) SELECT count(*), sum(quantity) FROM shop.order_items WHERE pro
 
 ## P03 Partitioned table queried without the partition key
 
-**What:** `audit_log` is split into 37 monthly partitions by `created_at`. A query that does not mention `created_at` must look in every partition.
+**What:** `audit_log` is split into 36 monthly partitions (plus a default partition) by `created_at`. A query that does not mention `created_at` must look in every partition.
 
 **Planted by:** `db/schema/040_append_partitioned.sql`; the only secondary index is `(table_name, record_id)`.
 
