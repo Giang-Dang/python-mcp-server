@@ -1,0 +1,66 @@
+COUNTRIES = [
+    ("US", "United States", "North America"),
+    ("CA", "Canada", "North America"),
+    ("MX", "Mexico", "North America"),
+    ("GB", "United Kingdom", "Europe"),
+    ("DE", "Germany", "Europe"),
+    ("FR", "France", "Europe"),
+    ("ES", "Spain", "Europe"),
+    ("IT", "Italy", "Europe"),
+    ("NL", "Netherlands", "Europe"),
+    ("SE", "Sweden", "Europe"),
+    ("NO", "Norway", "Europe"),
+    ("PL", "Poland", "Europe"),
+    ("IE", "Ireland", "Europe"),
+    ("CH", "Switzerland", "Europe"),
+    ("AU", "Australia", "Oceania"),
+    ("NZ", "New Zealand", "Oceania"),
+    ("JP", "Japan", "Asia"),
+    ("KR", "South Korea", "Asia"),
+    ("CN", "China", "Asia"),
+    ("IN", "India", "Asia"),
+    ("SG", "Singapore", "Asia"),
+    ("VN", "Vietnam", "Asia"),
+    ("TH", "Thailand", "Asia"),
+    ("ID", "Indonesia", "Asia"),
+    ("BR", "Brazil", "South America"),
+    ("AR", "Argentina", "South America"),
+    ("CL", "Chile", "South America"),
+    ("ZA", "South Africa", "Africa"),
+    ("EG", "Egypt", "Africa"),
+    ("AE", "United Arab Emirates", "Asia"),
+]
+
+CURRENCIES = [
+    ("USD", "US Dollar", 2),
+    ("EUR", "Euro", 2),
+    ("GBP", "Pound Sterling", 2),
+    ("CAD", "Canadian Dollar", 2),
+    ("AUD", "Australian Dollar", 2),
+    ("JPY", "Japanese Yen", 0),
+    ("CHF", "Swiss Franc", 2),
+    ("SEK", "Swedish Krona", 2),
+    ("INR", "Indian Rupee", 2),
+    ("VND", "Vietnamese Dong", 0),
+]
+
+# Ids must match the constants in model.py (PENDING=1 ... ON_HOLD=8).
+ORDER_STATUSES = [
+    (1, "pending", "Order created, awaiting payment", False),
+    (2, "paid", "Payment captured", False),
+    (3, "processing", "Being picked and packed", False),
+    (4, "shipped", "Handed to the carrier", False),
+    (5, "delivered", "Received by the customer", True),
+    (6, "cancelled", "Cancelled before shipping", True),
+    (7, "refunded", "Returned and refunded", True),
+    (8, "on_hold", "Waiting for manual review", False),
+]
+
+PAYMENT_METHODS = [
+    (1, "card", "Credit or debit card", True),
+    (2, "paypal", "PayPal", True),
+    (3, "bank_transfer", "Bank transfer", True),
+    (4, "apple_pay", "Apple Pay", True),
+    (5, "gift_card", "Gift card", True),
+    (6, "cash_on_delivery", "Cash on delivery", False),
+]

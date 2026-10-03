@@ -1,0 +1,33 @@
+name: shopmcp-test
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test_admin
+      POSTGRES_DB: shop
+      SHOP_OWNER_PASSWORD: test_owner
+      LOADER_PASSWORD: test_loader
+      MCP_READER_PASSWORD: test_reader
+      MCP_WRITER_PASSWORD: test_writer
+      MCP_PROC_EXEC_PASSWORD: test_proc
+      MCP_MONITOR_PASSWORD: test_monitor
+      MCP_AUDIT_OWNER_PASSWORD: test_audit_owner
+      MCP_AUDIT_PASSWORD: test_audit
+    ports:
+      - "127.0.0.1:55439:5432"
+    command: [postgres, -c, shared_preload_libraries=pg_stat_statements, -c, pg_stat_statements.track=all, -c, max_wal_size=2GB]
+    shm_size: 512mb
+    volumes:
+      - test_pgdata:/var/lib/postgresql/data
+      - ../db/init:/docker-entrypoint-initdb.d:ro
+      - ../db/schema:/db/schema:ro
+      - ../db/mcp:/db/mcp:ro
+      - ../db/audit:/db/audit:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d shop"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+volumes:
+  test_pgdata:

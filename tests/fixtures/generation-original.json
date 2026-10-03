@@ -1,0 +1,1132 @@
+{
+  "static": [
+    [
+      "shop.currencies",
+      [
+        "currency_code",
+        "name",
+        "minor_units"
+      ],
+      [
+        [
+          "USD",
+          "US Dollar",
+          2
+        ],
+        [
+          "EUR",
+          "Euro",
+          2
+        ],
+        [
+          "GBP",
+          "Pound Sterling",
+          2
+        ]
+      ]
+    ],
+    [
+      "shop.countries",
+      [
+        "country_code",
+        "name",
+        "region"
+      ],
+      [
+        [
+          "US",
+          "United States",
+          "North America"
+        ],
+        [
+          "CA",
+          "Canada",
+          "North America"
+        ],
+        [
+          "MX",
+          "Mexico",
+          "North America"
+        ]
+      ]
+    ],
+    [
+      "shop.order_statuses",
+      [
+        "status_id",
+        "code",
+        "description",
+        "is_terminal"
+      ],
+      [
+        [
+          1,
+          "pending",
+          "Order created, awaiting payment",
+          false
+        ],
+        [
+          2,
+          "paid",
+          "Payment captured",
+          false
+        ],
+        [
+          3,
+          "processing",
+          "Being picked and packed",
+          false
+        ]
+      ]
+    ],
+    [
+      "shop.payment_methods",
+      [
+        "payment_method_id",
+        "code",
+        "name",
+        "is_active"
+      ],
+      [
+        [
+          1,
+          "card",
+          "Credit or debit card",
+          true
+        ],
+        [
+          2,
+          "paypal",
+          "PayPal",
+          true
+        ],
+        [
+          3,
+          "bank_transfer",
+          "Bank transfer",
+          true
+        ]
+      ]
+    ],
+    [
+      "shop.tenants",
+      [
+        "tenant_id",
+        "name",
+        "plan",
+        "created_at"
+      ],
+      [
+        [
+          1,
+          "Alder and Finch",
+          "enterprise",
+          "2021-01-01 00:00:00+00"
+        ],
+        [
+          2,
+          "Bluebird Supply",
+          "free",
+          "2021-01-01 00:00:00+00"
+        ],
+        [
+          3,
+          "Copperline Goods",
+          "standard",
+          "2021-01-01 00:00:00+00"
+        ]
+      ]
+    ],
+    [
+      "shop.categories",
+      [
+        "category_id",
+        "parent_id",
+        "name",
+        "slug"
+      ],
+      [
+        [
+          1,
+          null,
+          "Electronics",
+          "electronics-1"
+        ],
+        [
+          2,
+          null,
+          "Home and Kitchen",
+          "homeandkitchen-2"
+        ],
+        [
+          3,
+          null,
+          "Sports and Outdoors",
+          "sportsandoutdoors-3"
+        ]
+      ]
+    ],
+    [
+      "shop.suppliers",
+      [
+        "supplier_id",
+        "name",
+        "country_code",
+        "contact_email",
+        "lead_time_days",
+        "rating",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          "Tran Inc",
+          "US",
+          "sales1@supplier1.example.test",
+          45,
+          "2.54",
+          "2024-01-01 00:00:00+00"
+        ],
+        [
+          2,
+          "Maldonado PLC",
+          "US",
+          "sales2@supplier2.example.test",
+          30,
+          "3.71",
+          "2024-01-01 00:00:00+00"
+        ],
+        [
+          3,
+          "Brown PLC",
+          "US",
+          "sales3@supplier3.example.test",
+          14,
+          "4.25",
+          "2024-01-01 00:00:00+00"
+        ]
+      ]
+    ],
+    [
+      "shop.warehouses",
+      [
+        "warehouse_id",
+        "name",
+        "country_code",
+        "city",
+        "capacity_units"
+      ],
+      [
+        [
+          1,
+          "Watsonfort Fulfilment Centre 1",
+          "US",
+          "Watsonfort",
+          356527
+        ],
+        [
+          2,
+          "South Stephentown Fulfilment Centre 2",
+          "US",
+          "South Stephentown",
+          448574
+        ],
+        [
+          3,
+          "West Nicolafort Fulfilment Centre 3",
+          "GB",
+          "West Nicolafort",
+          307329
+        ]
+      ]
+    ]
+  ],
+  "customers": [
+    [
+      "shop.customers",
+      [
+        "customer_id",
+        "tenant_id",
+        "email",
+        "first_name",
+        "last_name",
+        "phone",
+        "tier",
+        "order_count",
+        "marketing_opt_in",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      [
+        [
+          1,
+          5,
+          "brenda.vincent.1@post.example.test",
+          "Brenda",
+          "Vincent",
+          "7988477350",
+          "platinum",
+          128,
+          true,
+          "2021-10-17 10:06:17+00",
+          "2023-08-12 00:32:30+00",
+          null
+        ],
+        [
+          2,
+          5,
+          "jesse.hodges.2@inbox.example.test",
+          "Jesse",
+          "Hodges",
+          "510.602.7465",
+          "platinum",
+          118,
+          false,
+          "2022-12-14 22:17:30+00",
+          "2023-08-04 02:53:27+00",
+          null
+        ],
+        [
+          3,
+          1,
+          "james.davenport.3@web.example.test",
+          "James",
+          "Davenport",
+          "001-290-747-8455x886",
+          "platinum",
+          120,
+          false,
+          "2022-10-18 07:56:09+00",
+          "2022-12-10 22:24:15+00",
+          null
+        ]
+      ]
+    ]
+  ],
+  "addresses": [
+    [
+      "shop.addresses",
+      [
+        "address_id",
+        "customer_id",
+        "kind",
+        "line1",
+        "line2",
+        "city",
+        "region",
+        "postal_code",
+        "country_code",
+        "is_default",
+        "created_at",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          1,
+          "shipping",
+          "94439 Mendoza Vista",
+          null,
+          "Lake Robertomouth",
+          "Hawaii",
+          "06949",
+          "US",
+          true,
+          "2023-09-10 01:04:54+00",
+          "2023-09-10 01:04:54+00"
+        ],
+        [
+          2,
+          1,
+          "billing",
+          "3568 Michael Mission Apt. 239",
+          null,
+          "Bowmanmouth",
+          "Louisiana",
+          "98173",
+          "US",
+          true,
+          "2023-09-10 01:04:54+00",
+          "2023-09-10 01:04:54+00"
+        ],
+        [
+          3,
+          2,
+          "shipping",
+          "487 Hopkins Route Apt. 151",
+          null,
+          "Whitebury",
+          "Kentucky",
+          "73561",
+          "US",
+          true,
+          "2023-12-12 06:37:39+00",
+          "2023-12-12 06:37:39+00"
+        ]
+      ]
+    ]
+  ],
+  "products": [
+    [
+      "shop.products",
+      [
+        "product_id",
+        "supplier_id",
+        "category_id",
+        "sku",
+        "name",
+        "description",
+        "brand",
+        "base_price",
+        "currency_code",
+        "attributes",
+        "is_active",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      [
+        [
+          1,
+          8,
+          21,
+          "SKU-0000001",
+          "Responsibility Choice Wool",
+          "Get tend join different forget only interesting month. Despite purpose respond mention scene general.",
+          "Adams",
+          "60.99",
+          "USD",
+          "{\"material\": \"cotton\", \"origin\": \"Comoros\", \"dimensions_cm\": {\"w\": 93, \"h\": 54, \"d\": 50}, \"tags\": [\"bank\", \"somebody\", \"father\", \"vote\", \"quickly\", \"less\"], \"specs\": {\"line\": \"Mean recognize official physical medical listen three.\", \"down\": \"Fall second approach offer hope.\", \"apply\": \"Difficult voice again president smile tell few common.\", \"view\": \"Often development evening describe kitchen simply military.\", \"fine\": \"Collection account must far both meeting suffer.\"}, \"care\": \"Fall including whether represent democratic high. Maintain role maybe yourself billion she. Large mother question.\", \"warranty_months\": 0, \"seo\": {\"title\": \"Before nor job after prepare wish.\", \"keywords\": [\"create\", \"partner\", \"she\", \"machine\", \"machine\", \"high\", \"movie\", \"short\"]}}",
+          true,
+          "2021-04-18 06:32:27+00",
+          "2023-10-06 13:33:36+00",
+          null
+        ],
+        [
+          2,
+          193,
+          44,
+          "SKU-0000002",
+          "Sit Medical Ceramic",
+          "Another join value specific shoulder by. Onto after discussion another car employee. If himself dinner allow address effort.",
+          "Lee Inc",
+          "131.99",
+          "USD",
+          "{\"material\": \"recycled plastic\", \"origin\": \"Kuwait\", \"dimensions_cm\": {\"w\": 44, \"h\": 14, \"d\": 69}, \"tags\": [\"though\", \"activity\", \"same\", \"another\", \"wind\", \"friend\", \"enjoy\", \"language\"], \"specs\": {\"writer\": \"People case huge one radio.\", \"something\": \"Almost almost ten huge.\", \"drop\": \"Receive manager pressure trial.\", \"new\": \"Thus family little reveal.\", \"page\": \"Opportunity wait play determine event.\", \"heavy\": \"Free I group much brother weight clearly gun.\", \"almost\": \"Continue read forget interview remain school medical thought.\", \"right\": \"Wind generation more answer PM send job central.\", \"eat\": \"Respond laugh improve bit effort country mother.\", \"now\": \"Myself admit question tonight.\"}, \"care\": \"Make history particular seem store continue run.\", \"warranty_months\": 12, \"seo\": {\"title\": \"No speak film both machine.\", \"keywords\": [\"which\", \"kid\", \"person\", \"inside\", \"last\", \"maybe\", \"occur\", \"between\"]}}",
+          true,
+          "2022-11-14 08:56:12+00",
+          "2024-04-12 05:38:31+00",
+          null
+        ],
+        [
+          3,
+          56,
+          11,
+          "SKU-0000003",
+          "Natural Election Recycled Plastic",
+          "Rest artist first police note idea million. Win everybody since out cut term knowledge another. Spring money material call girl floor.",
+          "Taylor-Coleman",
+          "365.99",
+          "USD",
+          "{\"material\": \"cotton\", \"origin\": \"Saint Kitts and Nevis\", \"dimensions_cm\": {\"w\": 28, \"h\": 46, \"d\": 34}, \"tags\": [\"house\", \"measure\", \"American\", \"course\"], \"specs\": {\"just\": \"Better important site amount alone.\", \"nature\": \"Wish region develop range business after.\", \"off\": \"Very realize event.\", \"end\": \"Team see program cause.\", \"trial\": \"Start main at task fact media.\", \"leave\": \"Involve paper expect wear any.\", \"record\": \"Official establish maybe maybe Mrs none.\", \"first\": \"Part doctor fire book.\", \"need\": \"Born fund student money yet eye direction fine.\"}, \"care\": \"Summer can car check. Easy town speak still real address lot choice. Chair either development every political president.\", \"warranty_months\": 12, \"seo\": {\"title\": \"Of city evidence late learn what likely.\", \"keywords\": [\"sit\", \"represent\", \"term\", \"agent\", \"kitchen\", \"home\", \"husband\", \"animal\"]}}",
+          false,
+          "2020-10-02 00:18:30+00",
+          "2022-12-14 19:24:27+00",
+          "2023-04-16 14:49:34+00"
+        ]
+      ]
+    ]
+  ],
+  "product_variants": [
+    [
+      "shop.product_variants",
+      [
+        "variant_id",
+        "product_id",
+        "sku",
+        "size",
+        "color",
+        "weight_grams",
+        "price_delta",
+        "barcode",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          1,
+          "SKU-0000001-1",
+          "S",
+          "white",
+          113,
+          "0.00",
+          "4000000000001",
+          true,
+          "2020-07-27 03:59:01+00",
+          "2020-07-27 03:59:01+00"
+        ],
+        [
+          2,
+          1,
+          "SKU-0000001-2",
+          "M",
+          "red",
+          163,
+          "1.00",
+          "4000000000002",
+          true,
+          "2021-03-13 07:43:44+00",
+          "2021-03-13 07:43:44+00"
+        ],
+        [
+          3,
+          1,
+          "SKU-0000001-3",
+          "L",
+          "blue",
+          213,
+          "2.00",
+          "4000000000003",
+          true,
+          "2020-11-25 23:26:05+00",
+          "2020-11-25 23:26:05+00"
+        ]
+      ]
+    ]
+  ],
+  "employees": [
+    [
+      "shop.employees",
+      [
+        "employee_id",
+        "warehouse_id",
+        "manager_id",
+        "full_name",
+        "email",
+        "role",
+        "hired_at",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          null,
+          null,
+          "Matthew Wright",
+          "matthewwright.1@shop.example.test",
+          "Inventory Analyst",
+          "2022-02-08",
+          "2026-10-02 00:00:00+00"
+        ],
+        [
+          2,
+          10,
+          null,
+          "Nathan Vazquez",
+          "nathanvazquez.2@shop.example.test",
+          "Picker",
+          "2018-07-06",
+          "2026-10-02 00:00:00+00"
+        ],
+        [
+          3,
+          9,
+          null,
+          "James Fisher",
+          "jamesfisher.3@shop.example.test",
+          "Warehouse Manager",
+          "2019-06-28",
+          "2026-10-02 00:00:00+00"
+        ]
+      ]
+    ]
+  ],
+  "orders": [
+    [
+      "shop.orders",
+      [
+        "order_id",
+        "tenant_id",
+        "customer_id",
+        "status_id",
+        "order_number",
+        "channel",
+        "currency_code",
+        "subtotal",
+        "tax_amount",
+        "shipping_amount",
+        "discount_amount",
+        "total_amount",
+        "shipping_address_id",
+        "billing_address_id",
+        "notes",
+        "placed_at",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      [
+        [
+          1,
+          3,
+          245,
+          5,
+          "ORD-03-00000001",
+          "store",
+          "USD",
+          "841.98",
+          "67.36",
+          "0.00",
+          "0.00",
+          "909.34",
+          489,
+          490,
+          null,
+          "2024-01-01 00:05:54+00",
+          "2024-01-01 00:05:54+00",
+          "2024-01-02 00:09:14+00",
+          null
+        ],
+        [
+          2,
+          4,
+          18484,
+          7,
+          "ORD-04-00000002",
+          "web",
+          "USD",
+          "640.91",
+          "51.27",
+          "0.00",
+          "32.04",
+          "660.14",
+          36967,
+          36968,
+          null,
+          "2024-01-01 00:11:57+00",
+          "2024-01-01 00:11:57+00",
+          "2024-01-02 15:09:35+00",
+          null
+        ],
+        [
+          3,
+          5,
+          8273,
+          5,
+          "ORD-05-00000003",
+          "mobile",
+          "USD",
+          "20.98",
+          "1.68",
+          "5.99",
+          "0.00",
+          "28.65",
+          16545,
+          16546,
+          null,
+          "2024-01-01 00:15:40+00",
+          "2024-01-01 00:15:40+00",
+          "2024-01-04 18:02:13+00",
+          null
+        ]
+      ]
+    ],
+    [
+      "shop.order_items",
+      [
+        "order_item_id",
+        "order_id",
+        "product_id",
+        "variant_id",
+        "quantity",
+        "unit_price",
+        "discount",
+        "line_total",
+        "created_at"
+      ],
+      [
+        [
+          1,
+          1,
+          8004,
+          32015,
+          1,
+          "479.99",
+          "0.00",
+          "479.99",
+          "2024-01-01 00:05:54+00"
+        ],
+        [
+          2,
+          1,
+          1345,
+          5377,
+          1,
+          "361.99",
+          "0.00",
+          "361.99",
+          "2024-01-01 00:05:54+00"
+        ],
+        [
+          3,
+          2,
+          1744,
+          6974,
+          1,
+          "28.99",
+          "0.00",
+          "28.99",
+          "2024-01-01 00:11:57+00"
+        ]
+      ]
+    ],
+    [
+      "shop.payments",
+      [
+        "payment_id",
+        "tenant_id",
+        "order_id",
+        "payment_method_id",
+        "amount",
+        "currency_code",
+        "status",
+        "provider_ref",
+        "paid_at",
+        "created_at",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          3,
+          1,
+          1,
+          "909.34",
+          "USD",
+          "captured",
+          "pi_b0346646e1ff22a5",
+          "2024-01-01 00:14:02+00",
+          "2024-01-01 00:05:54+00",
+          "2024-01-01 00:14:02+00"
+        ],
+        [
+          2,
+          4,
+          2,
+          1,
+          "660.14",
+          "USD",
+          "refunded",
+          "pi_77a0be060f4a7d84",
+          "2024-01-01 00:15:13+00",
+          "2024-01-01 00:11:57+00",
+          "2024-01-01 00:15:13+00"
+        ],
+        [
+          3,
+          5,
+          3,
+          1,
+          "28.65",
+          "USD",
+          "captured",
+          "pi_d6a35672d30fad12",
+          "2024-01-01 00:22:37+00",
+          "2024-01-01 00:15:40+00",
+          "2024-01-01 00:22:37+00"
+        ]
+      ]
+    ],
+    [
+      "shop.shipments",
+      [
+        "shipment_id",
+        "order_id",
+        "warehouse_id",
+        "carrier",
+        "tracking_number",
+        "status",
+        "shipped_at",
+        "delivered_at",
+        "created_at",
+        "updated_at"
+      ],
+      [
+        [
+          1,
+          1,
+          8,
+          "UPS",
+          "1Z27E0996C3AB4",
+          "delivered",
+          "2024-01-03 23:22:17+00",
+          "2024-01-10 05:22:31+00",
+          "2024-01-03 23:22:17+00",
+          "2024-01-10 05:22:31+00"
+        ],
+        [
+          2,
+          2,
+          2,
+          "FedEx",
+          "1Z2BC33C63A753",
+          "returned",
+          "2024-01-03 02:52:01+00",
+          "2024-01-05 11:21:48+00",
+          "2024-01-03 02:52:01+00",
+          "2024-01-05 11:21:48+00"
+        ],
+        [
+          3,
+          3,
+          7,
+          "Royal Mail",
+          "1ZEFA429E84533",
+          "delivered",
+          "2024-01-03 02:20:16+00",
+          "2024-01-05 16:54:33+00",
+          "2024-01-03 02:20:16+00",
+          "2024-01-05 16:54:33+00"
+        ]
+      ]
+    ],
+    [
+      "shop.shipment_items",
+      [
+        "shipment_item_id",
+        "shipment_id",
+        "order_item_id",
+        "quantity"
+      ],
+      [
+        [
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          2,
+          1,
+          2,
+          1
+        ],
+        [
+          3,
+          2,
+          3,
+          1
+        ]
+      ]
+    ],
+    [
+      "shop.invoices",
+      [
+        "invoice_id",
+        "order_id",
+        "invoice_number",
+        "status",
+        "total_amount",
+        "issued_at",
+        "due_at"
+      ],
+      [
+        [
+          1,
+          1,
+          "INV-000000001",
+          "paid",
+          "909.34",
+          "2024-01-01 01:00:51+00",
+          "2024-01-31 01:00:51+00"
+        ],
+        [
+          2,
+          2,
+          "INV-000000002",
+          "paid",
+          "660.14",
+          "2024-01-01 00:14:53+00",
+          "2024-01-31 00:14:53+00"
+        ],
+        [
+          3,
+          3,
+          "INV-000000003",
+          "paid",
+          "28.65",
+          "2024-01-01 01:12:41+00",
+          "2024-01-31 01:12:41+00"
+        ]
+      ]
+    ],
+    [
+      "shop.refunds",
+      [
+        "refund_id",
+        "order_id",
+        "payment_id",
+        "amount",
+        "reason",
+        "status",
+        "created_at"
+      ],
+      [
+        [
+          1,
+          2,
+          2,
+          "660.14",
+          "wrong size",
+          "processed",
+          "2024-01-11 13:04:17+00"
+        ],
+        [
+          2,
+          14,
+          16,
+          "525.43",
+          "wrong size",
+          "processed",
+          "2024-01-25 11:03:26+00"
+        ],
+        [
+          3,
+          31,
+          33,
+          "272.14",
+          "not as described",
+          "processed",
+          "2024-01-27 19:50:18+00"
+        ]
+      ]
+    ]
+  ],
+  "carts": [
+    [
+      "shop.carts",
+      [
+        "cart_id",
+        "customer_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "expires_at"
+      ],
+      [
+        [
+          1,
+          43480,
+          "open",
+          "2026-03-19 16:36:14+00",
+          "2026-03-22 11:17:21+00",
+          "2026-03-26 16:36:14+00"
+        ],
+        [
+          2,
+          27071,
+          "converted",
+          "2024-11-09 16:17:13+00",
+          "2024-11-10 21:07:52+00",
+          "2024-11-16 16:17:13+00"
+        ],
+        [
+          3,
+          3694,
+          "converted",
+          "2026-07-07 19:47:02+00",
+          "2026-07-08 07:21:11+00",
+          "2026-07-14 19:47:02+00"
+        ]
+      ]
+    ]
+  ],
+  "inventory": [
+    [
+      "shop.inventory",
+      [
+        "warehouse_id",
+        "variant_id",
+        "quantity_on_hand",
+        "quantity_reserved",
+        "reorder_point",
+        "updated_at"
+      ],
+      [
+        [
+          2,
+          1,
+          93,
+          0,
+          15,
+          "2024-02-16 18:43:19+00"
+        ],
+        [
+          1,
+          1,
+          160,
+          2,
+          30,
+          "2026-03-08 02:45:28+00"
+        ],
+        [
+          3,
+          2,
+          10,
+          1,
+          43,
+          "2026-02-12 18:34:14+00"
+        ]
+      ]
+    ]
+  ],
+  "inventory_movements": [
+    [
+      "shop.inventory_movements",
+      [
+        "movement_id",
+        "warehouse_id",
+        "variant_id",
+        "movement_type",
+        "quantity",
+        "reference_type",
+        "reference_id",
+        "created_at"
+      ],
+      [
+        [
+          1,
+          2,
+          2911,
+          "receipt",
+          21,
+          "purchase_order",
+          7262,
+          "2025-01-16 08:00:51+00"
+        ],
+        [
+          2,
+          3,
+          11727,
+          "sale",
+          -4,
+          "order",
+          156299,
+          "2024-01-29 06:02:27+00"
+        ],
+        [
+          3,
+          9,
+          9638,
+          "sale",
+          -3,
+          "order",
+          109023,
+          "2026-04-09 16:45:23+00"
+        ]
+      ]
+    ]
+  ],
+  "audit_log": [
+    [
+      "shop.audit_log",
+      [
+        "audit_id",
+        "created_at",
+        "tenant_id",
+        "table_name",
+        "record_id",
+        "action",
+        "changed_by",
+        "old_data",
+        "new_data"
+      ],
+      [
+        [
+          1,
+          "2024-09-24 11:41:48+00",
+          null,
+          "products",
+          7611,
+          "U",
+          "app",
+          "{\"base_price\": \"367.66\", \"is_active\": false}",
+          "{\"base_price\": \"31.55\", \"is_active\": false}"
+        ],
+        [
+          2,
+          "2024-08-13 06:47:50+00",
+          1,
+          "orders",
+          115101,
+          "U",
+          "app",
+          "{\"status\": \"processing\", \"total_amount\": \"879.09\"}",
+          "{\"status\": \"cancelled\", \"total_amount\": \"238.26\"}"
+        ],
+        [
+          3,
+          "2024-01-23 01:59:10+00",
+          4,
+          "customers",
+          9264,
+          "U",
+          "support",
+          "{\"tier\": \"silver\", \"marketing_opt_in\": true}",
+          "{\"tier\": \"gold\", \"marketing_opt_in\": false}"
+        ]
+      ]
+    ]
+  ],
+  "price_history": [
+    [
+      "shop.price_history",
+      [
+        "price_history_id",
+        "product_id",
+        "old_price",
+        "new_price",
+        "changed_at",
+        "changed_by"
+      ],
+      [
+        [
+          1,
+          2499,
+          "138.73",
+          "137.34",
+          "2024-07-02 13:25:13+00",
+          "admin"
+        ],
+        [
+          2,
+          4848,
+          "308.87",
+          "318.13",
+          "2026-09-28 20:03:42+00",
+          "supplier_feed"
+        ],
+        [
+          3,
+          1231,
+          "305.89",
+          "296.71",
+          "2025-05-03 01:11:46+00",
+          "admin"
+        ]
+      ]
+    ]
+  ],
+  "totals": {
+    "items": 599268,
+    "payments": 211509,
+    "shipments": 190534,
+    "shipment_items": 519216,
+    "invoices": 183356,
+    "refunds": 15804
+  },
+  "order_counts_sha256": "6246f72444d134bfdecd331186c0ef4f13232d452fe800a8dd6941f81899c7c4"
+}
