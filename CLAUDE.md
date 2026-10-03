@@ -4,8 +4,8 @@
 
 This repo is a learning project with two parts:
 
-1. **`shop` database**: a realistic Postgres 17 e-commerce database (S ~25 tables / ~500 MB,
-   M ~60 tables / ~8-10 GB) with triggers, stored procedures and deliberately planted performance
+1. **`shop` database**: a realistic Postgres 17 e-commerce database (25 tables; profile S is
+   4.6M rows / 0.9 GB, profile M is 105M rows / 19 GB) with triggers, stored procedures and deliberately planted performance
    problems. It runs in Docker and is filled by a Python seeder.
 2. **MCP server** (next phase): a "guarded SQL" server built with FastMCP. It classifies SQL as
    read or mutate, asks the human before mutations (MCP elicitation), and calls only allowlisted
@@ -53,7 +53,7 @@ Postgres client tools are not on the host: use `docker compose exec db psql -U p
 - `tests/sql/step4_checks.sql` is safe (one rolled-back transaction); it still advances sequences. Never run `archive_old_orders`,
   `bulk_update_prices`, `purge_abandoned_carts` or `recalc_customer_tiers` against the real data without asking.
 - Ask before `docker compose down -v`, `shopdb reset` or anything else that destroys the data volume.
-- The planted performance problems (P01-P13 in `docs/planted-problems.md`, written in step 5) are intentional.
+- The planted performance problems (P01-P13 in `docs/planted-problems.md`; `tests/test_planted.py` fails if one disappears) are intentional.
   Do not "fix" them with extra indexes or rewrites unless asked.
 - Default scale in the repo is S. M is 105M rows, 19 GB and about 5 minutes to seed; do not start an M seed without asking.
   The local `.env` may say `SHOP_SCALE=M` (it is git-ignored); `shopdb verify` and the integration tests follow it.

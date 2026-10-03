@@ -748,3 +748,81 @@ applied 100_indexes.sql (57.7s)  ...  applied 140_analyze.sql (40.9s)   7 file(s
 - **Cardinality estimation and skew**: the planner assumes values are spread evenly. https://www.postgresql.org/docs/17/planner-stats.html
 - **Buffer cache vs OS page cache**: https://www.postgresql.org/docs/17/runtime-config-resource.html#GUC-SHARED-BUFFERS
 - **Write-ahead log (`pg_wal`) and `max_wal_size`**: https://www.postgresql.org/docs/17/wal-configuration.html
+
+---
+
+## Step 5: Planted problems you can prove
+
+### Goal and why
+
+Turn thirteen deliberate weaknesses (P01-P13) from "things I put in the data" into things that are **documented, measurable and guarded**.
+
+Why it is needed: until now nothing would notice if a problem vanished. A well-meant `CREATE INDEX`, a manual `ANALYZE` or switching autovacuum back on would
+quietly remove a trap, and the guarded SQL server would then be tested against a gentler database than intended. Each guard test turns that into a failing test with
+the problem's name in it.
+
+Why it came after M (step 6) in practice: the problems are only convincing at scale, so their evidence was collected on the M profile.
+
+Alternatives considered: documenting the problems only in prose (nothing enforces it); making the tests destructive (for example really deadlocking and really bloating a
+table). Instead the concurrency tests use rolled-back transactions, and the one test that needs real dead rows (P12) uses a throwaway table that it drops.
+
+### Commands
+
+```powershell
+# P05 needs real data work: it rewrites every product document three times with autovacuum off (about 8 s at M)
+poetry run shopdb post-load --only 145
+
+# the guards (4 seconds at M)
+poetry run pytest tests/test_planted.py -v
+
+# the whole suite (31 tests; 60 seconds at M because it includes the full verifier)
+poetry run pytest -q
+```
+
+### What each part does and why it is needed
+
+- `145_bloat.sql` (new, re-run safe): disables autovacuum on `products`, then runs three `UPDATE`s over all 100,000 rows. Each update writes a new copy of the whole row and leaves the old
+  copy dead, so the table ends up four times its real size. It does nothing if autovacuum is already off, so running `post-load` again does not pile on more bloat.
+- Single-session guards read the **query plan** as JSON (`EXPLAIN (FORMAT JSON)`) and assert on its shape ("a Seq Scan on order_items", "37 partitions probed", "the planner's row
+  estimate is at least 2x too low"). That makes them independent of machine speed, which timings would not be.
+- The concurrency guards (P08 lock wait, P11 deadlock) open two real connections. P11 uses two threads and a barrier so both hold one lock before asking for the other; the database
+  detects the cycle after `deadlock_timeout` (1 s) and aborts exactly one of them. Everything is rolled back.
+- P12 proves the vacuum effect on a scratch table with autovacuum disabled: an old snapshot is held open, 5,000 rows are updated, `VACUUM` is run (5,000 dead rows remain), the snapshot
+  is released, `VACUUM` is run again (0 remain).
+
+### Files created
+
+`db/post_load/145_bloat.sql`; `tests/test_planted.py` (20 tests); `docs/planted-problems.md` (every problem: what, where it was planted, repro query, measured evidence, why it matters for the MCP server,
+the usual fix that was deliberately not applied, and how to restore it).
+
+### Expected output
+
+```text
+$ poetry run shopdb post-load --only 145
+applied 145_bloat.sql (8.4s)         # products: 120 MB -> 496 MB, 299,508 dead row versions
+
+$ poetry run pytest tests/test_planted.py -v
+... 20 passed in 4.03s
+$ poetry run pytest -q
+31 passed in 60.25s
+```
+
+Negative controls (the same checks on a case that is not broken, to show the tests can tell the difference): lookup by the indexed `variant_id` uses an `Index Only Scan`; an ordinary customer's
+order estimate is 40 vs 4 actual (a hot customer is 40 vs 160); `customers.tier` statistics are accurate (989,433 vs 989,724); two sessions on different inventory rows do not block each other.
+
+### Troubleshooting and things that were not obvious
+
+- **P13's test first failed with a syntax error.** It takes the query text out of the trigger function's source, and that text contains PL/pgSQL's `SELECT ... INTO a, b`, which is not valid plain SQL.
+  The test now strips the `INTO` clause. Lesson: SQL inside a function body is not always runnable on its own.
+- **A leftover line in the test** (an assertion on an unused import) was removed.
+- **Timings were avoided as assertions** on purpose; they vary by machine and by cache. Plan shapes and ratios (for example "at least 2x") are stable at both profiles.
+- **P05's bloat is bigger than the amount of data changed.** The documents only gained two small keys, but each update copies the whole ~1.2 KB row, hence 4x.
+- **A transaction that is merely open can cause harm (P12).** Nothing in it has to write anything.
+
+### Concepts
+
+- **Dead tuples, MVCC and VACUUM**: https://www.postgresql.org/docs/17/routine-vacuuming.html
+- **Reading plans (`EXPLAIN`, JSON format)**: https://www.postgresql.org/docs/17/using-explain.html
+- **Deadlocks**: https://www.postgresql.org/docs/17/explicit-locking.html#LOCKING-DEADLOCKS
+- **Partition pruning**: https://www.postgresql.org/docs/17/ddl-partitioning.html#DDL-PARTITION-PRUNING
+- **Trigram indexes (`pg_trgm`)**: https://www.postgresql.org/docs/17/pgtrgm.html
