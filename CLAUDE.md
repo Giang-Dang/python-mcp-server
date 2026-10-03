@@ -30,6 +30,7 @@ poetry run shopdb seed --scale S      # load data (S default, M for the big prof
 poetry run shopdb verify              # seed checks (valid only on a freshly seeded database)
 poetry run shopdb post-load           # indexes, functions, triggers, procedures, ANALYZE, grants (db/post_load)
 poetry run pytest                     # smoke tests
+.\db\workload\run.ps1 -Scenario browse|orders|hot|deadlock|mixed   # pgbench load, rolled back unless -Commit
 poetry run ruff check . ; poetry run ruff format .
 ```
 
@@ -57,6 +58,7 @@ Postgres client tools are not on the host: use `docker compose exec db psql -U p
   Do not "fix" them with extra indexes or rewrites unless asked.
 - Default scale in the repo is S. M is 105M rows, 19 GB and about 5 minutes to seed; do not start an M seed without asking.
   The local `.env` may say `SHOP_SCALE=M` (it is git-ignored); `shopdb verify` and the integration tests follow it.
+- Workload scripts in `db/workload` roll back by default. Ask before using `run.ps1 -Commit` (it changes stock, orders and audit rows).
 - Never commit `.env`. Do not run mutating SQL against the database without the user's approval.
 
 ## Documentation rule (important)

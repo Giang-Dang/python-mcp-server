@@ -826,3 +826,101 @@ order estimate is 40 vs 4 actual (a hot customer is 40 vs 160); `customers.tier`
 - **Deadlocks**: https://www.postgresql.org/docs/17/explicit-locking.html#LOCKING-DEADLOCKS
 - **Partition pruning**: https://www.postgresql.org/docs/17/ddl-partitioning.html#DDL-PARTITION-PRUNING
 - **Trigram indexes (`pg_trgm`)**: https://www.postgresql.org/docs/17/pgtrgm.html
+
+---
+
+## Step 7: Workload and diagnostics (generate load, then read it back)
+
+### Goal and why
+
+Step 5 proved each planted problem with a one-off query or test. Real problems do not arrive as one query: they show up as **load**, a
+mix of statements from many sessions at once, and you find them with **diagnostic views**. This step adds both halves:
+
+1. `db/workload/` - [pgbench](https://www.postgresql.org/docs/17/pgbench.html) scripts that generate traffic (reads, orders, hot rows, deadlocks).
+2. `db/observability/` - SQL that answers "what is slow", "who is blocked" and "where are the dead rows" (`pg_stat_statements`, `pg_stat_activity`, `pg_stat_user_tables`).
+
+Why it matters for the MCP server: its job will be to run SQL for someone who is looking at exactly these views. The server needs realistic
+load and realistic diagnostics to be tested against, and statement timeouts, lock timeouts and result caps only mean something under contention.
+
+Alternatives rejected:
+- **A Python load generator**: pgbench is already in the image, speaks the protocol natively, handles client threads and latency
+  statistics, and its scripts are plain SQL (readable, and reusable later as the workload the MCP server's SQL is compared to).
+- **Mounting `db/workload` into the container** (a compose volume): it would force a container recreate. `docker compose cp` copies the files in
+  at run time instead.
+- **Letting write scripts commit by default**: they would change the data (stock, orders, audit rows) and make the database drift away from
+  the deterministic seed. Every write script ends in `ROLLBACK` unless you pass `-Commit` (`-D commit=1`).
+
+### Commands
+
+```powershell
+# from the repo root, with the container running
+.\db\workload\run.ps1 -Scenario browse   -Seconds 20 -Clients 8      # reads as mcp_reader
+.\db\workload\run.ps1 -Scenario orders   -Seconds 20 -Clients 8      # create_order, rolled back
+.\db\workload\run.ps1 -Scenario hot      -Seconds 12 -Clients 16     # P08 contention
+.\db\workload\run.ps1 -Scenario deadlock -Seconds 15                 # P11
+.\db\workload\run.ps1 -Scenario mixed    -Seconds 15 -Clients 10     # readers and order writers together
+
+# read the evidence (run.ps1 resets pg_stat_statements first, so the report shows only the last run)
+Get-Content db\observability\top_queries.sql | docker compose exec -T db psql -U postgres -d shop -f -
+Get-Content db\observability\locks.sql       | docker compose exec -T db psql -U postgres -d shop -f -   # run WHILE a workload runs
+Get-Content db\observability\bloat.sql       | docker compose exec -T db psql -U postgres -d shop -f -
+```
+
+### What each part does and why it is needed
+
+- **`docker compose cp db/workload db:/tmp/`** - pgbench is in the container, not on the host, so the scripts go in first (done on every run, so edits are picked up).
+- **`pgbench -n -r -P 5 -T 20 -c 8 -j 4 -D commit=0 --failures-detailed -f script`** -
+  `-n` skip pgbench's own table maintenance (it expects its own tables); `-r` latency per statement; `-P 5` progress line every 5 s; `-T` duration;
+  `-c` clients (connections); `-j` worker threads; `-D commit=0` sets the variable the scripts test with `\if :commit`; `--failures-detailed` counts deadlocks separately.
+- **Passwords** are read from `.env` by `run.ps1` and passed as `PGPASSWORD` to that one command; they are never printed or written to a file.
+- **Which role runs what, and why**
+  - `browse_read.sql` runs as **mcp_reader**: tenant 1 through RLS, read-only, 15 s statement timeout (the same constraints the MCP server will have).
+  - `place_order.sql` runs as **shop_owner**: only the owner can both look up valid ids and `EXECUTE shop.create_order`. `mcp_proc_exec` has no table access at all (least privilege), so it cannot choose valid customers and variants. The script sets `app.tenant_id` itself, as an application would.
+  - `hot_inventory.sql` and `deadlock_*.sql` run as **loader** (the role the tests use for the same two problems).
+- **`browse_read.sql`**: a weighted mix with `\if`. IDs come from `random_zipfian`, so a few customers and orders are requested far more than others (real traffic, and what makes P01 visible).
+- **`place_order.sql`**: `\gset` runs a query and stores the result columns as pgbench variables. It picks the first valid tenant-1 customer at or after a random id and two in-stock variants, then calls `create_order`. `quote_literal(...)` is used because pgbench has no psql-style `:'name'` quoting.
+- **`hot_inventory.sql`**: Zipf-distributed variants, a no-op `UPDATE ... SET reorder_point = reorder_point` (takes the row lock and writes a new row version, changes no value) and `pg_sleep(0.005)` to stand for application work done while holding the lock.
+- **`deadlock_a.sql` / `deadlock_b.sql`**: lock variant 1 then 2, and variant 2 then 1, with a 0.3 s pause between. Run together, they deadlock about a third of the time.
+- **`top_queries.sql`**: `pg_stat_statements` ordered by total time (where the server spends its life) and by mean time (what one call costs). `stddev_ms` far above `mean_ms` means skew.
+- **`locks.sql`**: `pg_blocking_pids(pid)` joined back to `pg_stat_activity`: one row per (waiting session, blocker). Also long open transactions and the deadlock counter.
+- **`bloat.sql`**: `pg_stat_user_tables` (no table scan): dead rows, dead %, bytes per live row, last autovacuum, and a note when autovacuum is off. Also the oldest snapshot holders (P12).
+
+### Files created
+
+- `db/workload/browse_read.sql`, `place_order.sql`, `hot_inventory.sql`, `deadlock_a.sql`, `deadlock_b.sql`, `run.ps1`
+- `db/observability/top_queries.sql`, `locks.sql`, `bloat.sql` (`table_sizes.sql` already existed)
+
+### Expected output (from the real runs on profile M, rolled back)
+
+| Scenario | Result |
+|---|---|
+| browse, 8 clients | about 177 to 237 tps, 0 failures. Slowest statement: `low_stock_items(10, 20)` at about 255 ms; ILIKE search about 71 ms (P04); category listing about 11 ms |
+| orders, 8 clients | about 3,165 tps, `create_order` 1.5 ms average, 0 failures |
+| hot, 16 clients | about 474 tps; the UPDATE takes about 28 ms against a 5 ms sleep, the rest is waiting for row locks (P08) |
+| deadlock, 2 clients, 15 s | 9 of 29 transactions failed with `deadlock detected` (5 in script a, 4 in script b); the other side always finished |
+| mixed (10 clients: 7 readers, 3 writers) | readers about 143 tps, writers about 969 tps, 0 failures |
+
+`top_queries.sql` after the mixed run ranked `low_stock_items` first by total time (60 s over 212 calls), then `create_order`, the category listing and the ILIKE search.
+It also showed work nobody wrote: `SELECT ... FROM ONLY "shop"."addresses" ... FOR KEY SHARE` (58,140 calls) is Postgres checking a foreign key on every order insert, and the `UPDATE shop.orders ... SET subtotal` is the statement trigger recomputing totals.
+
+`locks.sql` during the hot scenario listed the queue: 16 sessions, each waiting on the one holding the popular variant's row, and some waiting behind another waiter.
+
+Nothing visible changed after all of this (rollbacks): orders 5,000,000, order_items 14,998,089, inventory_movements 20,000,000, audit_log 30,000,000, the same as the seed.
+
+### Troubleshooting and things that were not obvious
+
+- **`syntax error at or near ":"`** in `place_order.sql`: I used `:'vids'` (psql quoting). pgbench only understands plain `:vids`. The query now returns an already-quoted literal.
+- **`insufficient stock for variant 60 ... (on hand 0, reserved 1)`**: the stock validation trigger from step 4 correctly rejects orders for empty variants, and pgbench aborts a client on any error that is not a deadlock or serialization failure. Zipf picks popular variants, which are often empty. The script now picks variants with at least 6 units available.
+- **`expected one row, got 0`**: a random start near the end of the id range had no valid row after it. The starts now stay below 990,000 and 300,000.
+- **Half of the category listings returned nothing**: categories 1 to 20 are parents with no products; the products are in 21 to 200. With an empty match the planner walked the primary key and filtered all 100,000 rows (112 ms): a classic `ORDER BY pk LIMIT n` plan trap, and a useful thing to know. With real category ids the same statement takes about 11 ms.
+- **The mixed scenario failed when it called `run.ps1` twice at once** (two simultaneous `docker compose cp`, and the jobs' output vanished). It now copies once and starts two `docker compose exec` jobs directly.
+- **Some in-place `sed -i` edits silently did not apply** (patterns containing a backslash and parentheses); I switched to a small Python replacement and checked the file afterwards. Lesson: always re-read after an in-place edit.
+- **Rolled-back work still leaves marks**: sequences advance, and rolled-back inserts leave dead rows (`bloat.sql` showed about 150k to 240k dead rows in `orders`, `order_items`, `inventory_movements`; autovacuum cleans them, except where it is switched off on purpose: `carts`, `products`). The planted-problem tests still pass (20 of 20).
+- **Committed write runs are possible but you must ask for them**: `-Commit` makes stock shrink and rows accumulate; after that the database no longer matches the seed and `shopdb verify` is not meaningful.
+
+### Concepts
+
+- **pgbench custom scripts, `\set`, `\gset`, `\if`, Zipf**: https://www.postgresql.org/docs/17/pgbench.html
+- **pg_stat_statements**: https://www.postgresql.org/docs/17/pgstatstatements.html
+- **Monitoring views (`pg_stat_activity`, `pg_locks`, `pg_blocking_pids`)**: https://www.postgresql.org/docs/17/monitoring-stats.html
+- **Explicit locking and deadlocks**: https://www.postgresql.org/docs/17/explicit-locking.html
