@@ -8,7 +8,8 @@ queries, stored procedures, and deliberate performance and security pitfalls to 
 are implemented. `shopmcp serve` exposes nine tools over Streamable HTTP with Auth0,
 bounded SQL, human-approved mutations, a reviewed procedure registry, and a separate audit
 database. Automated HTTP and isolated PostgreSQL acceptance tests pass. A real Auth0
-tenant and Inspector login still need to be configured and verified.
+tenant, Inspector login, approved and declined mutations, and a procedure call were
+also verified by hand against the test instance (setup guide Step 17).
 
 Start with [the server runbook](docs/guarded-server.md) for Auth0, audit provisioning,
 runtime configuration, and the Inspector walkthrough.
