@@ -1168,3 +1168,237 @@ Same 25 tables and comments as before the change: the behaviour did not change, 
 - **Core vs ORM**: https://docs.sqlalchemy.org/en/20/tutorial/index.html
 - **Table metadata and `select()`**: https://docs.sqlalchemy.org/en/20/tutorial/data_select.html
 - **Connection pooling**: https://docs.sqlalchemy.org/en/20/core/pooling.html
+
+## Step 12: Characterize and separate the seeder (2026-10-03)
+
+Goal: preserve generated data while separating pure dataset rules and workflows
+from Faker, PostgreSQL, files, and Windows worker processes. Moving code without
+a baseline was rejected because it would hide changes to deterministic values.
+
+Commands run from the repository root:
+
+```powershell
+$env:PYTHONPATH='src;tests'
+.venv/Scripts/python.exe -c "import json; from pathlib import Path; from characterization import snapshot; Path('tests/fixtures/generation-original.json').write_text(json.dumps(snapshot(), indent=2, ensure_ascii=True)+'\n', encoding='ascii')"
+poetry lock
+poetry install
+.venv/Scripts/python.exe .scratch/refactor_seeder.py
+.venv/Scripts/python.exe -m ruff check src/shopdb --fix
+.venv/Scripts/python.exe -m ruff format src/shopdb tests/characterization.py
+.venv/Scripts/python.exe -c "import json; from pathlib import Path; from characterization import snapshot; assert snapshot()==json.loads(Path('tests/fixtures/generation-original.json').read_text()); print('Original generator snapshot matches')"
+```
+
+The first command captures representative rows from every generator and all static
+tables, child totals, and a hash of order counts before changing generation code.
+Poetry locked and installed SQLGlot 30.21.0 (one installation, no upgrades).
+The refactor script created feature Core and adapters; compatibility imports retain
+old Python entry points. It is a local implementation helper, not a setup prerequisite.
+The snapshot comparison printed `Original generator snapshot matches`.
+
+Failures: a four-order sample violated the original generator's chunk-layout check;
+using the full original 25,000-order chunk fixed capture. Sandbox Poetry returned
+`Failed to canonicalize script path`; the approved host execution succeeded. Ruff
+found a missing `defaultdict` import after extracting the renderer; it was restored.
+Docker inspection initially lacked pipe/config permissions; approved host inspection
+found Docker 29.7.2 and the existing database on port 5433. No existing data was changed.
+
+Files: `tests/fixtures/generation-original.json`, `tests/characterization.py`, the
+new `shopdb/core` and `shopdb/adapters` packages, bootstrap, and settings. Workers
+now receive the selected Settings object through the process initializer.
+
+Concepts: [spawn](https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods),
+[COPY](https://www.postgresql.org/docs/17/sql-copy.html),
+[SQLGlot](https://sqlglot.com/sqlglot.html).
+
+## Step 13: Isolated S verification (2026-10-03)
+
+Goal: verify real Windows worker behavior and database integrity without using the
+existing port 5433 database. Reusing that volume was rejected. The dedicated Compose
+project uses port 55439 and volume `shopmcp-test_test_pgdata`.
+
+```powershell
+docker compose -f tests/compose.yml up -d --wait
+.venv/Scripts/python.exe tests/seed_isolated.py
+.venv/Scripts/python.exe -m pytest tests/test_model.py tests/test_characterization.py -q
+```
+
+Compose created the separate network, volume, and `shopmcp-test-db-1` container and
+reported it healthy. The seed runner passes explicit settings with `_env_file=None`
+to both the parent and Windows-spawned workers, loads S, runs integrity checks
+before mutations, then applies post-load scripts. It loaded **4,630,316 rows in
+27.6 seconds**; all 39 fresh-data checks passed. All nine post-load files applied.
+The pure model, CLI, and characterization suite reported **10 passed**.
+
+Files: `tests/compose.yml`, `tests/support.py`, `tests/seed_isolated.py`, and
+`tests/conftest.py`. The test flag `SHOP_TEST_DATABASE=isolated` explicitly selects
+these connection settings. Without it, database tests are skipped. No test falls
+back to the project's local database. Retain the test volume for inspection;
+deleting it is a separate destructive action.
+
+Troubleshooting: sandbox pytest could not write its cache and emitted a warning;
+the assertions passed. Later runs can disable the cache provider with
+`-p no:cacheprovider`. The S runner itself had no database or worker failures.
+
+Concepts: [Compose project isolation](https://docs.docker.com/compose/how-tos/project-name/),
+[PostgreSQL transactions](https://www.postgresql.org/docs/17/tutorial-transactions.html).
+
+## Step 14: Async server dependencies and isolated audit storage (2026-10-03)
+
+Goal: use separate runtime roles and an append-only audit database. Reusing the
+shop transaction for audit was rejected: rollback must not erase the request trail.
+Migration credentials are accepted only by the audit CLI, never by server Settings.
+
+```powershell
+docker compose -f tests/compose.yml exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1 -f /db/mcp/000_roles.sql
+$env:SHOPMCP_MIGRATION_URL='postgresql+psycopg://mcp_audit_owner:test_audit_owner@127.0.0.1:55439/mcp_audit'
+.venv/Scripts/python.exe -m mcp_server.cli audit migrate
+$env:SHOP_TEST_DATABASE='isolated'
+.venv/Scripts/python.exe -m pytest tests/test_seed_integrity.py tests/test_planted.py tests/test_docgen.py -q -p no:cacheprovider
+poetry lock
+poetry install
+$env:PYTHONPATH='src;tests'
+.venv/Scripts/python.exe .scratch/inspect_definitions.py
+```
+
+The provisioning script created the monitoring role, audit owner/runtime roles,
+and separate database only in the test instance. Migration output was
+`{"applied": ["001_operations.sql"], "pending": []}`. Existing integration checks
+reported **27 passed**, covering the seed, documentation, and all planted P01-P13
+checks before mutation acceptance tests.
+
+Initial async inspection failed because SQLAlchemy needed `greenlet`. Declaring
+`sqlalchemy[asyncio]` and reinstalling added greenlet 3.5.6. The next attempt found
+that psycopg cannot run on Windows' default Proactor loop. `mcp_server.runtime.run_async`
+now chooses a Selector loop explicitly at startup. The read-only inspection then
+succeeded and printed names, signatures and definition hashes. The initial YAML
+contains the ten ordinary procedures from `130_procedures.sql`; adversarial and
+refcursor procedures were excluded. No existing reviewed hash was replaced.
+
+Files: `db/mcp/000_roles.sql`, `db/audit/migrations/001_operations.sql`,
+`config/procedures.yaml`, server Core/adapters/bootstrap/runtime, and
+`.env.mcp.example`. Local inspection output stays in ignored `.scratch`.
+
+Concepts: [SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html),
+[psycopg asynchronous connections](https://www.psycopg.org/psycopg3/docs/advanced/async.html),
+[sequence rollback behavior](https://www.postgresql.org/docs/17/functions-sequence.html).
+
+## Step 15: Guarded SQL, HTTP acceptance, and final verification (2026-10-03)
+
+Goal: exercise the actual authentication/provider, MCP elicitation, streaming,
+transaction, registry, and audit boundaries. Mock-only validation was insufficient
+for commit uncertainty, Windows spawning, and procedures with internal COMMITs.
+Tests use controlled signing keys for Auth0 and a real, isolated PostgreSQL instance;
+no real Auth0 tenant has been configured in this session.
+
+### Commands and purpose
+
+```powershell
+# Default suite: pure Core/adapters, characterization, controlled Auth0 HTTP, MCP elicitation.
+poetry run pytest -q -p no:cacheprovider
+
+# Explicit isolated-database acceptance, after the fresh baseline checks in step 14.
+$env:SHOP_TEST_DATABASE='isolated'
+poetry run pytest tests/test_guarded_integration.py tests/test_guarded_failures.py tests/test_http_integration.py tests/test_worker_configuration.py -q -p no:cacheprovider
+Remove-Item Env:SHOP_TEST_DATABASE
+
+# Installed CLI and dependency metadata.
+poetry run shopmcp --help
+poetry check
+
+# A new migration preserves the original applied migration's checksum.
+$env:SHOPMCP_MIGRATION_URL='postgresql+psycopg://mcp_audit_owner:test_audit_owner@127.0.0.1:55439/mcp_audit'
+poetry run shopmcp audit migrate
+poetry run shopmcp audit status
+Remove-Item Env:SHOPMCP_MIGRATION_URL
+
+poetry run ruff check .
+poetry run ruff format --check .
+git -c core.safecrlf=false diff --check
+```
+
+The agent invoked pytest and Ruff through `.venv/Scripts/python.exe -m` with the
+same arguments, adding `--tb=short --maxfail=1` on targeted regression runs.
+Formatting fixes used `.venv/Scripts/python.exe -m ruff check . --fix` and
+`.venv/Scripts/python.exe -m ruff format .` before the final read-only checks.
+The final isolated suite ran after both audit migrations were applied.
+
+The migration commands returned both `001_operations.sql` and
+`002_expiry_and_comments.sql` in `applied`, with an empty `pending` list. Migration
+002 converts token expiry to timestamptz and documents the audit tables/columns.
+The CLI help exposes `serve`, `inspect-registry`, and `audit`; Poetry reported
+`All set!`.
+
+### Results
+
+- Default suite: **81 passed, 48 skipped**. The skips are database tests requiring
+  the explicit isolation flag, not hidden failures.
+- Final guarded-database/HTTP/worker suite: **21 passed**. This includes a real
+  loopback HTTP client, approved and declined writes, streamed row/byte caps,
+  cost rejection before approval, statement timeouts, cancellation, audit outages,
+  live definition drift, INOUT output, and connection cleanup.
+- Earlier pristine-baseline suite: **27 passed** (step 14), after all **39 fresh
+  S integrity checks** passed (step 13). Baseline checks precede mutations because
+  the acceptance tests intentionally change the disposable fixture and sequences.
+- Cancellation during archive's second batch and an injected second-batch failure
+  both left the first batch committed and produced `partially_completed`, with no
+  retry. A simulated lost commit acknowledgement produced `uncertain`; a final
+  audit failure after a confirmed commit retained `committed`.
+- A Windows-spawned worker successfully connected using supplied test settings
+  while default POSTGRES_PORT was deliberately set to unreachable port 9.
+  Reseeding with post-load triggers was refused even with `force=True`.
+- Ruff check passed; format check reported **127 files already formatted**;
+  `git diff --check` passed. An ASCII scan passed for **123** Python, registry,
+  migration, and new documentation files.
+
+A final architecture review moved the remaining seeder verification acceptance
+rules into Core. Before that extraction, a read-only run saved all 39 current
+check results to ignored `.scratch/verification-before.json`. After extraction,
+the same command compared each name, verdict, and detail and printed:
+`All 39 verification results exactly match before extraction`. This comparison
+preserves behavior on the already-mutated test dataset; it is not a second claim
+that the dataset remained pristine. The original generator fixture still matches.
+
+### Failures found and corrected
+
+- SQLGlot represents unrecognized cast types differently from built-in types.
+  A direct attribute access failed; unknown types now produce policy rejection.
+  Parsing uses the actual `ErrorLevel.RAISE` enum.
+- SQLGlot also represents AND/OR as function nodes. The initial positive function
+  list rejected a legitimate targeted predicate; both pure boolean forms are now
+  explicitly reviewed, with an integration regression test.
+- FastMCP's public Host/Origin option accepts `True`, `False`, or `auto`, not the
+  internal label `strict`. The runtime uses `True`; malicious host/origin tests pass.
+- The archive-cancellation test initially polled pg_stat_activity as shop_owner,
+  which could not observe another role's wait details. The test now uses its
+  explicit test-admin observer; production roles were not broadened.
+- Poetry generated `shopmcp.cmd` on Windows, not `shopmcp.exe`. A direct `.exe`
+  probe failed; `poetry run shopmcp --help` succeeded.
+- The final formatting check caught an unformatted audit metadata loop. Formatting
+  was applied and both lint and formatting were checked again.
+- A final pass-through SQL regression using `SELECT '100%:name', 5 % 2` failed:
+  the driver interpreted percent characters as parameter syntax. Raw SQL now uses
+  `no_parameters=True` for preview, streaming, and mutation execution. The test
+  covers both the read and an approved update containing `LIKE '%'`. The final
+  21-test database suite and 81-test default suite passed after this correction.
+
+### Files, decisions, and remaining manual acceptance
+
+New server features live in `src/mcp_server/core`; external concerns live in
+`src/mcp_server/adapters`. The registry is `config/procedures.yaml`. Runtime
+configuration is `.env.mcp.example`, with local `.env.mcp` ignored. Audit migrations
+and separate provisioning scripts are in `db/audit` and `db/mcp`. Tests and fixtures
+are under `tests`; the operating instructions are in `docs/guarded-server.md`.
+README and roadmap describe implemented behavior and the outstanding manual check.
+
+The user confirmed Auth0 is not configured and requested implementation plus setup
+documentation. The real Inspector login/consent walkthrough is therefore pending.
+Use the runbook to provision the API, compatibility settings, developer account,
+and static PKCE client. No real login or consent success is claimed. The existing
+port 5433 database, local credentials, and prior setup-guide edits were preserved.
+The isolated test container and volume remain available for inspection.
+
+Concepts:
+[Auth0 resource profile](https://auth0.com/ai/docs/mcp/guides/resource-param-compatibility-profile),
+[Auth0 Inspector setup](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector),
+[SQLAlchemy streaming](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#sqlalchemy.ext.asyncio.AsyncConnection.stream),
+[PostgreSQL transaction control in procedures](https://www.postgresql.org/docs/17/plpgsql-transactions.html).

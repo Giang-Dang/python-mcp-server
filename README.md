@@ -4,10 +4,14 @@ A learning project for building a Model Context Protocol (MCP) server around a r
 PostgreSQL e-commerce database. The `shop` database includes generated data, tenant-aware
 queries, stored procedures, and deliberate performance and security pitfalls to experiment with.
 
-**Current status:** the database and `shopdb` CLI are implemented. The FastMCP dependency is
-installed, but `src/mcp_server/` is still a placeholder. There is no MCP server to start or
-client configuration to use yet. The planned server will classify SQL as read or mutate,
-request human approval for mutations through MCP elicitation, and expose an allowlist of routines.
+**Current status:** the database, feature-first seeder, and authenticated guarded SQL server
+are implemented. `shopmcp serve` exposes nine tools over Streamable HTTP with Auth0,
+bounded SQL, human-approved mutations, a reviewed procedure registry, and a separate audit
+database. Automated HTTP and isolated PostgreSQL acceptance tests pass. A real Auth0
+tenant and Inspector login still need to be configured and verified.
+
+Start with [the server runbook](docs/guarded-server.md) for Auth0, audit provisioning,
+runtime configuration, and the Inspector walkthrough.
 
 ## What is included
 
@@ -106,8 +110,9 @@ Use `\q` to exit. For a host-side database client, connect to `localhost:5433`, 
 
 ## Configuration
 
-Python reads settings from environment variables or the repository's `.env`; environment
-variables take precedence. Docker Compose also uses `.env` for initialization.
+The seeder reads settings from environment variables or `.env`; environment variables take
+precedence. Docker Compose also uses `.env`. The server independently reads `.env.mcp`
+and `SHOPMCP_*` variables and never loads seeder or migration-owner credentials.
 
 | Setting | Default in the template | Purpose |
 | --- | --- | --- |
@@ -154,8 +159,8 @@ poetry run shopdb seed --scale M --confirm-large
 poetry run shopdb verify --scale M
 ```
 
-Set `SHOP_SCALE=M` in `.env` if you want subsequent commands and integration tests to use M.
-If you choose a different `--seed`, pass the same value to `verify` and set `SHOP_SEED` for tests.
+Set `SHOP_SCALE=M` in `.env` for subsequent seeder commands. Integration tests use their
+own explicit S settings on port 55439. Pass a matching `--seed` to `verify` after seeding.
 
 ## CLI reference
 
@@ -189,7 +194,7 @@ removes the database contents.** Use it only when you intend to discard them.
 # Model and generator tests; no database required.
 poetry run pytest tests/test_model.py
 
-# Full suite, including checks against the seeded database.
+# Core, adapter, authentication and HTTP tests; database tests skip by default.
 poetry run pytest
 
 # Lint and check formatting without changing files.
@@ -197,8 +202,9 @@ poetry run ruff check .
 poetry run ruff format --check .
 ```
 
-Integration tests skip when the database is unreachable or has no orders. They expect the
-seeded baseline and the profile and seed configured in `.env`.
+Integration tests require `SHOP_TEST_DATABASE=isolated` and the dedicated Compose instance
+on port 55439. Follow the two-phase [test procedure](docs/guarded-server.md#isolated-tests):
+fresh-seed checks first, mutation tests afterward. They never select the local `.env` database.
 
 Additional SQL checks live in [`tests/sql/`](tests/sql/). See the setup guide for how to run
 them. `step4_checks.sql` exercises routines in a rolled-back transaction, but still advances
@@ -213,12 +219,15 @@ sequences; run it against a disposable learning database.
 | `mcp_reader` | Read tables and selected routines; defaults to read-only transactions |
 | `mcp_writer` | Read tables and modify selected tables |
 | `mcp_proc_exec` | Execute granted routines without direct table privileges |
+| `mcp_monitor` | Fixed read-only diagnostic reports |
+| `mcp_audit_runtime` | Insert-only audit operations and events in `mcp_audit` |
+| `mcp_audit_owner` | Audit migrations and read-only history inspection; absent from runtime settings |
 
 This is a local learning database with intentional weaknesses, not a production security
 template. RLS covers only `customers`, `orders`, and `payments`. The client can change
 `app.tenant_id`, order lines and daily-sales aggregates expose cross-tenant data, and
 `search_orders` deliberately uses unsafe dynamic SQL. Routine grants are broader than the
-planned MCP server's allowlist. A `SELECT` or a routine named `get_*` is not necessarily free
+MCP server's allowlist. A `SELECT` or a routine named `get_*` is not necessarily free
 of side effects.
 
 The performance problems are also intentional. Adding indexes, analyzing tables, or rerunning
@@ -233,8 +242,11 @@ db/
   schema/               Tables, partitions, views, RLS, and table grants
   post_load/            Indexes, functions, triggers, procedures, and statistics
 src/
-  shopdb/               CLI, configuration, loader, generators, and verification
-  mcp_server/           Placeholder for the planned MCP server
+  shopdb/               Independent Core, adapters, settings, bootstrap, and CLI
+  mcp_server/           Feature Core, async adapters, Auth0, settings, bootstrap, and CLI
+config/procedures.yaml  Reviewed signatures, hashes, effects, and parameter limits
+db/mcp/                 Explicit monitoring/audit provisioning (not fixture initialization)
+db/audit/migrations/    Versioned audit migrations
 tests/
   test_model.py         Database-independent generator tests
   test_seed_integrity.py Seed and permission integration tests
@@ -242,6 +254,7 @@ tests/
 docs/
   setup-guide.md        Implementation log and detailed troubleshooting
 .env.example            Local configuration template
+.env.mcp.example        Runtime-only server configuration template
 docker-compose.yml      PostgreSQL service and persistent volume
 pyproject.toml          Package metadata, dependencies, and tool configuration
 poetry.lock             Locked dependency versions
