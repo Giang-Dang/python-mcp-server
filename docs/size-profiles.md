@@ -61,7 +61,7 @@ The original estimate for M was "1-3 hours". The real figure is far lower becaus
 | Write-ahead log in the container (`pg_wal`) | not measured | 4.1 GB |
 | Data directory on disk | not measured | 24 GB |
 
-Largest M tables (data + indexes): `audit_log` 7.1 GB (37 monthly partitions), `inventory_movements` 3.2 GB, `order_items` 2.1 GB,
+Largest M tables (data + indexes): `audit_log` 7.1 GB (36 monthly partitions plus a default), `inventory_movements` 3.2 GB, `order_items` 2.1 GB,
 `shipment_items` 1.6 GB, `orders` 1.5 GB. Regenerate with `db/observability/table_sizes.sql`.
 
 The earlier plan estimated 8-10 GB for M. The real figure is about twice that, mostly because of wide `audit_log` rows (two JSONB columns)

@@ -111,6 +111,19 @@ def reset(yes: bool = typer.Option(False, "--yes", help="Do not ask for confirma
     typer.echo("All tables truncated.")
 
 
+@app.command("docs")
+def docs_command(
+    out: str = typer.Option("docs", "--out", help="Folder for data-dictionary.md and erd.md."),
+) -> None:
+    """Regenerate docs/data-dictionary.md and docs/erd.md from the live database catalog."""
+    from pathlib import Path
+
+    from .docgen import generate
+
+    for path in generate(Path(out)):
+        typer.echo(f"wrote {path}")
+
+
 if __name__ == "__main__":
     # Needed on Windows: worker processes re-import this module.
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
