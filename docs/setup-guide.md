@@ -1599,3 +1599,91 @@ Concepts:
 [Auth0 Inspector setup](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector),
 [SQLAlchemy streaming](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#sqlalchemy.ext.asyncio.AsyncConnection.stream),
 [PostgreSQL transaction control in procedures](https://www.postgresql.org/docs/17/plpgsql-transactions.html).
+
+## Step 16: Connect Auth0 and MCP Inspector (2026-10-03)
+
+Goal: sign in through Auth0 and use the guarded SQL tools in Inspector. Use the
+already-provisioned test database on port **55439** for acceptance testing.
+
+### Auth0 configuration
+
+The full [Auth0 setup instructions](guarded-server.md#configure-auth0-and-inspector)
+cover account creation. These are the settings used for this walkthrough:
+
+| Setting | Value |
+| --- | --- |
+| Auth0 domain | `dev-*.us.auth0.com` |
+| API name / identifier | `Shop MCP Server` / `http://127.0.0.1:8000/mcp` |
+| API signing algorithm | RS256 |
+| Tenant Settings > Advanced | Enable Resource Parameter Compatibility Profile and Include Issuer in Authorization Responses |
+| Inspector application | `MCP Inspector`, Regular Web Application |
+| OAuth flow / token endpoint authentication | Authorization Code with PKCE / Client Secret (Post) |
+| Allowed callback URL | `http://localhost:6274/oauth/callback` |
+| Login connection | Enable the developer's database connection for Inspector; disable open signup |
+
+**The missing configuration was the application's user-delegated API grant:**
+
+1. Open **Applications > APIs > Shop MCP Server > Settings**. Under Application
+   Access Policy, set **User-Delegated Access** to **Per-app authorization**.
+2. Open that API's **Application Access** tab, find **MCP Inspector**, select
+   **Edit**, and authorize **User-Delegated Access**. Save the change.
+3. In Inspector, select **Re-authenticate** and sign in.
+
+A green check and a Grant ID confirm the grant. `0 / 0 permissions granted` is
+normal: this server requires no custom API scopes. Leave **Always grant all
+permissions** unchecked. Machine-to-machine Client Access is a separate grant.
+
+### Start the server and Inspector
+
+In `.env.mcp`, set `SHOPMCP_AUTH0_DOMAIN` to the domain above and
+`SHOPMCP_POSTGRES_PORT=55439`. Use the test instance's runtime database passwords;
+see [runtime configuration](guarded-server.md#configure-and-start-the-runtime).
+Keep the Inspector client ID and secret in **Inspector's OAuth Settings**.
+`.env.mcp` belongs to the SQL server, which validates tokens and does not perform
+Inspector's login. No migration-owner credentials belong in the runtime file.
+
+From the repository root, use two terminals:
+
+```powershell
+# Terminal 1: start the authenticated HTTP server on 127.0.0.1:8000.
+poetry run shopmcp serve
+
+# Terminal 2: start Inspector 2.9.0 with the existing editable local catalog.
+npx.cmd --yes @modelcontextprotocol/inspector@2.9.0 --catalog .scratch/inspector-catalog.json
+```
+
+Open `http://localhost:6274`. The catalog entry is **shop-mcp**, transport
+**Streamable HTTP**, URL `http://127.0.0.1:8000/mcp`. For a new catalog, add that
+entry in the UI. Save the client ID and secret under its **Settings > OAuth
+Settings**, leave custom API scopes empty, and connect. Use the legacy protocol
+mode for mutation elicitation with this server.
+
+Local files created during setup: `.env.mcp` (runtime configuration) and
+`.scratch/inspector-catalog.json` (Inspector catalog), both Git-ignored. Inspector
+stores the client secret through its OS keychain.
+
+### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| Auth0 says `Client ... is not authorized to access resource server ...` | Add the **User-Delegated Access** grant above, then re-authenticate. |
+| Inspector says the session is read-only | Launch with `--catalog`; `--config` and ad-hoc `--server-url` launches do not allow saved edits. |
+| Saving settings fails with `Invalid id` | Use catalog key `shop-mcp`, without spaces. |
+| Connection times out before Auth0 opens | In this session, adding `Accept: text/event-stream` to Inspector's internal `/api/mcp/events` request resolved the stall. The running Inspector uses the local `.scratch/inspector_sse_accept.mjs` launch hook; the plain `npx` command above does **not** load it. This machine-specific workaround is separate from the Auth0 grant. |
+| Opening `/api/mcp/events` directly says `Unauthorized` | Use the Inspector UI; direct navigation omits its required `x-mcp-remote-auth` header. |
+
+Refresh/InPrivate, stream padding, and antivirus exceptions did not fix the
+stall. Restore any antivirus settings changed during troubleshooting; the cause
+was not established. Diagnostic hooks and logs remain under ignored `.scratch/`.
+
+### Verified result
+
+The user connected Inspector through Auth0. A subsequent authenticated HTTP check
+using that session's token discovered all **nine tools**: `ping` returned `pong`,
+read-only database tools succeeded with operation IDs, and `SELECT pg_sleep(10)`
+was rejected with `policy_rejection`. No shop data was changed by these checks.
+The real Inspector mutation-approval and batch walkthrough remains pending.
+
+References: [Auth0 Inspector setup](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector),
+[Auth0 application access policies](https://auth0.com/blog/developers-guide-api-access-policies-auth0/),
+[Inspector catalog configuration](https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/configuration).
