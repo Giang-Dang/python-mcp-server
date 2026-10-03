@@ -1,7 +1,7 @@
 # Planted problems
 
 Thirteen deliberate weaknesses make the `shop` database behave like a real, slightly neglected production system. They exist so that
-the guarded SQL MCP server (next phase) has realistic things to detect, limit and survive. **Do not "fix" them by accident.**
+the guarded SQL MCP server (`shopmcp`, see [guarded-server.md](guarded-server.md)) has realistic things to detect, limit and survive. **Do not "fix" them by accident.**
 Each one has a guard in `tests/test_planted.py` that fails if the problem disappears.
 
 All numbers are from profile M (104.7M rows) on the build machine, warm cache, as the superuser (no row-level security).

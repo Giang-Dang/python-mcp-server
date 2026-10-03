@@ -85,10 +85,15 @@ Completed against a separate PostgreSQL 17 instance on port 55439:
 - A real loopback HTTP MCP client exercising discovery, reads, rejected unsafe SQL,
   declined/approved mutation, batch execution, and persisted audit records.
 
-Pending: provision the user's Auth0 tenant, API, developer account, and static
-Inspector client; perform the real browser login/consent walkthrough. The user
-confirmed Auth0 is not configured yet. Automated provider tests do not substitute
-for that final external integration check.
+Real-tenant checks (setup guide Steps 16-17, 2026-10-03, test instance on port 55439):
+Auth0 API, static Inspector client and developer account are configured; the user
+logged in through Auth0 and Inspector; reads, SQL policy rejections (no WHERE, multiple
+statements, pg_sleep), a declined and an approved UPDATE, and an approved
+`archive_old_orders` call each produced the expected outcome and audit events.
+
+Still not verified by hand: the exact approval prompt text was not captured, a
+multi-batch partial commit was not exercised through Inspector (automated tests
+cover it), and nothing was run against the live database on port 5433.
 
 The initial release does not include an audit UI, background jobs, arbitrary
 routine execution, unreviewed SQL extensions, or automatic recovery of incomplete

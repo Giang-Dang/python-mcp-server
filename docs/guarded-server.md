@@ -1,15 +1,16 @@
 # Authenticated guarded SQL server
 
 `shopmcp serve` runs at `http://127.0.0.1:8000/mcp`. It requires Auth0
-configuration and runtime database passwords. The previous stdio stub launch is
-replaced by this authenticated HTTP entry point. Imports do not start the server.
+configuration and runtime database passwords. It replaced the earlier unauthenticated
+stdio stub (history: setup guide Steps 8 and 10). Imports do not start the server.
 
 ## Configure Auth0 and Inspector
 
 Real Auth0 login and authenticated read-only checks succeeded on 2026-10-03.
 See [the local walkthrough](setup-guide.md#step-16-connect-auth0-and-mcp-inspector-2026-10-03)
 for the working configuration and Inspector troubleshooting. The real Inspector
-mutation-approval and batch walkthrough remains pending.
+mutation-approval, rejection, decline and batch walkthrough was completed on the
+test instance on 2026-10-03: see [Step 17](setup-guide.md#step-17-inspector-mutation-rejection-and-batch-acceptance-2026-10-03).
 
 1. Create an Auth0 API with identifier `http://127.0.0.1:8000/mcp` and RS256
    signing. Keep the server URL and audience identical.
@@ -266,10 +267,10 @@ After configuring the real tenant, start `shopmcp serve` with the isolated datab
 settings and launch:
 
 ```powershell
-npx @modelcontextprotocol/inspector@latest
+npx.cmd --yes @modelcontextprotocol/inspector@2.9.0 --catalog .scratch/inspector-catalog.json
 ```
 
-Select Streamable HTTP and `http://127.0.0.1:8000/mcp`. Enter the statically
+The catalog entry `shop-mcp` (setup guide Step 16) uses Streamable HTTP and `http://127.0.0.1:8000/mcp`. Enter the statically
 registered client ID/secret locally, connect, log in as the provisioned developer,
 and complete consent. Verify discovery and ping, then:
 
@@ -281,5 +282,7 @@ and complete consent. Verify discovery and ping, then:
    maximum batches 1. Confirm the partial-commit warning and approve.
 5. Inspect the operation IDs and events in `mcp_audit`.
 
-Record actual results after the browser walkthrough. No real Auth0/Inspector login
-is claimed by the automated tests.
+Results of the real walkthrough (test instance, 2026-10-03) are in setup guide Step 17:
+items 3-5 passed, plus the rejection and decline paths. The approval prompt text and a
+multi-batch partial commit were not captured by hand. The automated tests do not
+claim a real Auth0/Inspector login; that was done separately by the user.

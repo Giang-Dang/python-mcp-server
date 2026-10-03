@@ -138,7 +138,7 @@ If you re-run this later without the lock file you may get newer versions; `poet
 - **Virtual environment**: a private folder of installed packages for one project. See https://docs.python.org/3/tutorial/venv.html
 - **Lock file**: records the exact version of every dependency so every install is identical. See https://python-poetry.org/docs/basic-usage/#installing-with-poetrylock
 - **Entry point**: `[project.scripts] shopdb = "shopdb.cli:app"` makes `shopdb` a command that calls `app` in `shopdb/cli.py`.
-- **FastMCP** is installed now but unused until the MCP stub step. The installed version is 4.x, newer than most
+- **FastMCP** is installed now but unused until the MCP server steps (8 and later). The installed version is 4.x, newer than most
   tutorials, so check its docs at that step instead of trusting older examples.
 
 ---
@@ -929,6 +929,11 @@ Nothing visible changed after all of this (rollbacks): orders 5,000,000, order_i
 
 ## Step 8: MCP stub (prove the whole chain before adding any logic)
 
+> **Historical.** The stub, its `fastmcp dev|list|call|run` commands and `tests/test_mcp_stub.py`
+> were replaced by the authenticated guarded server in Steps 14-16 (`poetry run shopmcp serve`).
+> `src/mcp_server/server.py` is now only a compatibility entry point. The reasoning in this step
+> (prove each link of the chain before adding logic) still applies.
+
 ### Goal and why
 
 The next project phase is a "guarded SQL" server with real logic (classify SQL, ask before mutating, allowlisted procedures). Before writing any of that,
@@ -1095,6 +1100,13 @@ GitHub renders ` ```mermaid ` blocks, as do VS Code (with a Mermaid extension) a
 ---
 
 ## Step 10: Move the MCP server's data access to SQLAlchemy Core
+
+> **Partly superseded.** The rule (SQLAlchemy Core for the server's own queries, `exec_driver_sql` for
+> pass-through SQL) still holds. The code described here (`src/mcp_server/db.py` with `engine_for`, the stub's
+> `list_tables`, `tests/test_mcp_stub.py`) was reorganized in Steps 14-15 into `src/mcp_server/adapters/postgres/`
+> (async engines in `engines.py`, queries in `queries.py`); `db.py` now only re-exports `tables_query`.
+> Also, the roadmap sections referenced here (`section 4a`, open question 5) were replaced when
+> `docs/roadmap.md` was rewritten as an implementation status.
 
 ### Goal and why
 
@@ -1407,7 +1419,7 @@ Controls and protocol:
 [skill overrides](https://learn.chatgpt.com/docs/build-skills),
 [native configuration and import API](https://learn.chatgpt.com/docs/app-server).
 
-## Step 13: Isolated S verification (2026-10-03)
+## Step 13b: Isolated S verification (2026-10-03)
 
 Goal: verify real Windows worker behavior and database integrity without using the
 existing port 5433 database. Reusing that volume was rejected. The dedicated Compose
@@ -1682,8 +1694,96 @@ The user connected Inspector through Auth0. A subsequent authenticated HTTP chec
 using that session's token discovered all **nine tools**: `ping` returned `pong`,
 read-only database tools succeeded with operation IDs, and `SELECT pg_sleep(10)`
 was rejected with `policy_rejection`. No shop data was changed by these checks.
-The real Inspector mutation-approval and batch walkthrough remains pending.
+The Inspector mutation-approval and batch walkthrough was done in Step 17.
 
 References: [Auth0 Inspector setup](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector),
 [Auth0 application access policies](https://auth0.com/blog/developers-guide-api-access-policies-auth0/),
 [Inspector catalog configuration](https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/configuration).
+
+## Step 17: Inspector mutation, rejection and batch acceptance (2026-10-03)
+
+### Goal and why
+
+Step 16 proved login and read-only tools. The automated tests (Steps 14-15) use a fake Auth0 and a
+scripted MCP client, so none of them showed that a **real person** is asked, through a real client, before a
+change is made, or that the audit trail records what that person decided. This step does that walkthrough
+once, by hand, with Inspector. It is the last item `docs/guarded-server.md` listed as pending.
+
+It runs against the **disposable test instance (port 55439)**, never the live database on 5433. Reason: the
+steps change data (an updated row, an advanced timestamp, audit rows) and the test fixture is already
+documented as mutated by the integration tests. Alternative rejected: the live M database, because a mistake there
+would mean an 8-minute reseed or a `down -v` (both need your approval).
+
+### Preflight (read-only)
+
+```powershell
+# 1. Which database will the server use? Print only the non-secret keys.
+Select-String -Path .env.mcp -Pattern '^SHOPMCP_(POSTGRES_PORT|SHOP_DATABASE|AUDIT_DATABASE|TENANT_ID)='
+# 2. Audit migrations applied? (the migration URL is set for this one command only)
+$env:SHOPMCP_MIGRATION_URL='postgresql+psycopg://mcp_audit_owner:test_audit_owner@127.0.0.1:55439/mcp_audit'
+poetry run shopmcp audit status; Remove-Item Env:SHOPMCP_MIGRATION_URL
+# 3. Baseline of the row the test will touch (customer 3, tenant 1)
+docker compose -f tests/compose.yml exec -T db psql -U postgres -d shop -Atc "select customer_id, marketing_opt_in, updated_at from shop.customers where customer_id=3"
+```
+
+Real output: port `55439`; `{"applied": ["001_operations.sql", "002_expiry_and_comments.sql"], "pending": []}`;
+customer 3 had `marketing_opt_in = false` and `updated_at = 2022-12-10 22:24:15+00`. The live database on 5433
+showed 5,000,000 orders and 1,000,000 customers before and after.
+
+**Why customer 3 and `marketing_opt_in`:** the update `SET marketing_opt_in = marketing_opt_in` does not change the value, so
+the data is provably the same afterwards. It is still a real UPDATE: the trigger `trg_touch_updated_at` sets `updated_at` on every
+update, so that column is the visible proof that the statement ran (or did not).
+
+### What was run in Inspector
+
+Two things were already running from the earlier session, so no new terminals were needed: `shopmcp serve` (port 8000, three
+connections to 55439) and Inspector launched **with the `.scratch/inspector_sse_accept.mjs` hook** (port 6274). A second
+`shopmcp serve` fails with `[Errno 10048] ... only one usage of each socket address`, and a second plain `npx` Inspector lacks
+the hook from Step 16.
+
+| # | Tool | Input | Result | Audit events |
+|---|---|---|---|---|
+| 1 | `execute` | `UPDATE shop.customers SET tier = tier` | `rejected`, `policy_rejection`: "UPDATE and DELETE require WHERE." No prompt. | `error` |
+| 2 | `execute` | `SELECT 1; SELECT 2` | rejected before any prompt | `error` |
+| 3 | `execute` | `UPDATE shop.customers SET marketing_opt_in = marketing_opt_in WHERE customer_id = 3`, **approved** | `committed`, 1 row | `approval` > `execution_intent` > `commit_intent` > `outcome` |
+| 4 | `call_procedure` | `archive_old_orders`, args `{"p_before": "1900-01-01", "p_batch_size": 1, "p_max_batches": 1}`, **approved** | `committed` (`affected_rows` is null: the procedure reports no row count) | the same four events; the execution event carries the registry hash `c5a72128...` and `autocommit_batches`, the commit event `internal_commits: true` |
+| 5 | `execute` | the update from 3, **declined** | `declined`, `policy_rejection`: "Mutation approval declined." | `approval` (decision `declined`) > `error`; **no** `execution_intent` |
+
+The two responses pasted in full (rows 1 and 5) both had `audit_status: recorded` and `retry_safe: true`.
+
+### How it was checked
+
+```powershell
+# Operations and their event sequence (test instance, as the superuser)
+docker compose -f tests/compose.yml exec -T db psql -U postgres -d mcp_audit -c "select o.operation_id, o.tool, o.inputs, (select string_agg(e.kind,' > ' order by e.event_id) from audit.events e where e.operation_id=o.operation_id) events from audit.operations o where o.created_at > '2026-10-03 14:50' and o.tool <> 'ping' order by o.created_at"
+# Did the row change?
+docker compose -f tests/compose.yml exec -T db psql -U postgres -d shop -Atc "select customer_id, marketing_opt_in, updated_at from shop.customers where customer_id=3"
+```
+
+- Customer 3 after the approved update: `marketing_opt_in = false`, `updated_at = 2026-10-03 14:53:58.98+00`. After the **declined** run it
+  was still `14:53:58.98`: the decline changed nothing.
+- The approval event stores the decision, the Auth0 issuer and subject of the person, an expiry and a **fingerprint of the exact
+  request**. No token and no result set is stored.
+- The rejected operations (1, 2) have an `error` event but no `execution_intent`, so nothing reached the database.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `[Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000)` from `shopmcp serve` | A server from the earlier session is still running. Find it with `Get-NetTCPConnection -LocalPort 8000 -State Listen` and `Get-CimInstance Win32_Process`; reuse it (check its database port with `Get-NetTCPConnection -OwningProcess <pid>`: connections to 55439 mean the test instance). |
+| `MCP Inspector PORT IS IN USE at http://127.0.0.1:6274` | Same cause. Open `http://localhost:6274` and use the running Inspector, which already has the SSE hook from Step 16. |
+| Operation 2 was sent to `execute`, not `query` | Not an error. It is rejected by the same SQL policy either way; recorded as run. |
+| The audit table has `detail`, not `payload` | My first inspection query used a column that does not exist; `\d audit.events` shows `event_id, operation_id, kind, detail, created_at`. |
+
+### What this step does not prove
+
+- The text of the approval prompts was not captured, so "the person saw the complete preview and the partial-commit warning" is **reported by the user
+  ("ask for permission then run completely"), not recorded here**. The audit proves a decision was made by the Auth0 user, bound to a request fingerprint.
+- The archive call matched no rows (cutoff 1900-01-01), so a partial commit across several batches was not exercised by hand. The automated
+  tests cover cancellation and an injected second-batch failure (Step 15).
+- The test instance is not the live database. Nothing was run against 5433.
+
+### Concepts
+
+- **MCP elicitation** (the server asks the client to ask the human): https://modelcontextprotocol.io/specification/draft/client/elicitation
+- **Append-only audit with intent events**: the commit intent is recorded *before* the commit, so a crash leaves evidence rather than silence (see `docs/guarded-server.md`, "Inspect audit and uncertain operations").
