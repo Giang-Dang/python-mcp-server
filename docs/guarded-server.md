@@ -6,8 +6,10 @@ replaced by this authenticated HTTP entry point. Imports do not start the server
 
 ## Configure Auth0 and Inspector
 
-This setup is pending on the user's tenant; the implementation was tested with
-controlled metadata and signing keys.
+Real Auth0 login and authenticated read-only checks succeeded on 2026-10-03.
+See [the local walkthrough](setup-guide.md#step-16-connect-auth0-and-mcp-inspector-2026-10-03)
+for the working configuration and Inspector troubleshooting. The real Inspector
+mutation-approval and batch walkthrough remains pending.
 
 1. Create an Auth0 API with identifier `http://127.0.0.1:8000/mcp` and RS256
    signing. Keep the server URL and audience identical.
@@ -22,10 +24,18 @@ controlled metadata and signing keys.
    connection. Do not enable open dynamic client registration.
 5. No tool-specific scopes, roles, or permission tiers are required by this server.
    Tokens must have a valid signature, issuer, audience, expiry, and nonempty subject.
+6. Authorize Inspector to request user-delegated tokens for this API. In
+   Applications > APIs > Shop MCP Server > Settings > Application Access Policy,
+   use Per-app authorization for User-Delegated Access. Then open Application
+   Access, edit MCP Inspector, and authorize its User Access. This is distinct
+   from machine-to-machine Client Access. A missing user grant can produce
+   `Client ... is not authorized to access resource server ...` before login.
+   No custom API permission scopes are required for this server.
 
 Primary references:
 [Auth0 resource compatibility](https://auth0.com/ai/docs/mcp/guides/resource-param-compatibility-profile),
-[Auth0 Inspector registration](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector).
+[Auth0 Inspector registration](https://auth0.com/ai/docs/mcp/guides/test-your-mcp-server-with-mcp-inspector),
+[Auth0 API access policies](https://auth0.com/blog/developers-guide-api-access-policies-auth0/).
 
 ## Provision monitoring and audit storage
 
