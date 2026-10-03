@@ -296,3 +296,152 @@ loader       -> can INSERT and TRUNCATE; DROP TABLE: "must be owner of table cou
   partitions ("partition pruning"). https://www.postgresql.org/docs/17/ddl-partitioning.html
 - **psql `\getenv`**: reads an environment variable into a psql variable so passwords come from `.env`, not from SQL files. https://www.postgresql.org/docs/17/app-psql.html
 - **Compose healthcheck and `--wait`**: https://docs.docker.com/reference/compose-file/services/#healthcheck
+
+---
+
+## Step 3: The seeder (Faker + COPY + parallel workers)
+
+### Goal and why
+
+Fill the empty database with about 4.6 million rows of realistic, deterministic data (profile S), and prove the data is
+correct. The same code scales to profile M by changing one option.
+
+Why now: the next steps (indexes, triggers, procedures, planted performance problems) all need real rows to act on. A
+trigger you cannot fire or a missing index you cannot feel is not much of a lesson.
+
+The design choices, and why each was made:
+
+1. **Every value is a pure function of `(seed, id)`** (`src/shopdb/model.py`). Which customer placed order 1234, how many
+   lines it has, its status, its date: all computed by hashing, never looked up. Why: parallel workers can each generate any
+   slice of any table without talking to each other or reading the database, and the same seed always gives identical data
+   (a test proves it). Alternative rejected: generate rows randomly and read parent ids back from the database. That is slow,
+   serializes the workers, and makes runs unrepeatable.
+2. **A planning pass before loading.** `compute_order_layout` walks all orders once (0.6 s for 200k) and works out how many
+   child rows each order produces. Why: child tables use identity ids, so every parallel chunk needs a guaranteed
+   non-overlapping id range, and `customers.order_count` has to be correct at load time, before orders exist. The planner gives both.
+3. **Stages in foreign-key order.** Lookups, then customers/products, then addresses/variants, then orders and everything else.
+   Why: a stage can only start once the parents it references are committed. Inside a stage all chunks run in parallel.
+4. **One transaction per chunk.** An order chunk loads orders, lines, payments, shipments, invoices and refunds together. Why: if a
+   worker fails, its chunk rolls back entirely, so you never end up with an order that has no lines.
+5. **`COPY ... FROM STDIN`, not INSERT.** Why: COPY is the fastest way to load rows (one command, streamed), typically 10-50x
+   faster than row-by-row INSERT.
+6. **Faker where text quality matters, plain `random` where volume matters.** Names, emails, addresses and product text come
+   from Faker (with US, GB, DE, FR, CA and AU locales so addresses look right per country). The 30-million-row tables (audit log,
+   stock movements) are built from `random` and small pools, because Faker costs tens of microseconds per call. You asked for
+   "Faker + COPY streaming with multiprocessing"; this keeps that design and only avoids Faker on the rows where it would
+   not add realism.
+7. **The `loader` role, not a superuser.** It has `BYPASSRLS` (it must insert rows for every tenant) and INSERT/UPDATE/TRUNCATE, nothing else.
+   Why: the seeder then exercises the same permission model as everything else.
+8. **Money in integer cents** (`cents()` formats them). Why: floating point cannot represent 0.10 exactly, and the verifier compares sums exactly.
+
+### Commands
+
+```powershell
+# Pure-logic unit tests (no database needed) and the integration test (skips itself if the DB is down)
+poetry run pytest -q
+
+# Load the S profile into the empty database (about 30 seconds)
+poetry run shopdb seed --scale S --workers 8
+
+# Check the result against the model
+poetry run shopdb verify --scale S
+```
+
+Other commands that now exist:
+
+| Command | What it does |
+|---|---|
+| `shopdb seed --scale M --confirm-large` | The large profile. Needs the explicit flag because it loads about 10-15 GB. Not run yet. |
+| `shopdb seed --force` | Truncates existing data first. Without `--force`, seeding refuses to run on a non-empty database. |
+| `shopdb reset [--yes]` | Truncates every table and restarts identity sequences. Destroys all data, so it asks for confirmation. |
+| `--seed N` | Different seed, different (but internally consistent) data. Default comes from `SHOP_SEED` in `.env`. |
+
+### What each part does and why it is needed
+
+- `--workers 8`: eight loader processes. More than the number of CPU cores gains nothing, and a single Postgres container
+  also has a limit on how many parallel COPY streams help.
+- `shopdb verify` re-runs the planner to know what to expect, then compares: 25 exact row counts (the lookups included),
+  13 consistency queries, and the identity sequences. It exits non-zero on any failure, so it can gate a script or CI.
+- `SET synchronous_commit = off` (inside each worker): Postgres will not wait for the WAL flush at commit. A crash could lose the
+  last few chunks, which only means seeding again. This is a loader-only setting; normal sessions keep durable commits.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `src/shopdb/config.py` | `.env` settings (pydantic-settings) and the S/M row-count profiles. One place to change sizes. |
+| `src/shopdb/model.py` | The pure, deterministic rules: hashing, the order plan, tenants, prices, the planning pass. |
+| `src/shopdb/context.py` | The read-only data sent once to every worker process. |
+| `src/shopdb/generators/` | `static.py` (lookups, tenants, suppliers...), `core.py` (customers, addresses, products...), `orders.py` (an order and all its children), `append.py` (carts, inventory, movements, audit log, price history), `fake.py` (cached Faker instances). |
+| `src/shopdb/loader.py` | COPY helper, worker pool, stages, sequence reset, truncate. |
+| `src/shopdb/verify.py` | The 39 checks. |
+| `src/shopdb/db.py`, `cli.py` | Connection helper; the `seed`, `verify`, `reset`, `version` commands. |
+| `tests/test_model.py`, `tests/test_seed_integrity.py` | 11 tests: determinism, planted skew, id layout, then the full verification and tenant isolation against the live database. |
+
+### Expected output
+
+```text
+Planning orders for scale S (seed 42) ...
+  planned 200,000 orders -> 599,268 lines, 211,509 payments (0.6s)
+Loaded lookups, tenants, categories, suppliers, warehouses (0.2s)
+Stage B: customers, products, employees: 3 chunks on 8 workers
+  [3/3] customers chunk 0: 50,000 rows in 4.8s
+Stage C: addresses, product variants: 2 chunks on 8 workers
+Stage D: orders and children, carts, inventory, movements, audit log, price history: 21 chunks on 8 workers
+  [1/21] orders chunk 3: 244,965 rows in 5.4s
+  ...
+Reset 19 identity sequences
+Done: 4,630,316 rows in 27.0s
+```
+
+```text
+PASS  rows in orders: 200,000 (expected 200,000)
+PASS  rows in order_items: 599,268 (expected 599,268)
+PASS  order total = subtotal + tax + shipping - discount: 0 mismatching orders (allowed 0..0)
+PASS  customers.order_count = real number of orders: 0 mismatching customers (allowed 0..0)
+PASS  P01 skew: share of orders placed by the top 1% of customers (%): 30.8 percent (allowed 25..40)
+PASS  identity sequences are past max(id) (19 tables): all ok
+39 passed, 0 failed
+```
+
+What the data looks like afterwards: database size 741 MB (only primary-key and unique indexes exist so far); tenant 1 sees 19,905
+customers and 78,208 orders through row-level security (about 40%); a session with no tenant set sees 0 rows; the biggest table is
+`inventory_movements` at 95 MB.
+
+### Troubleshooting and things that were not obvious
+
+- **A smoke test failed with "order chunk 0: id layout drifted".** That was the safety assertion doing its job. I had cut the first
+  order chunk down to 200 orders to test quickly, so the ids handed out could not match the plan for the full 25,000. Re-running with
+  the full chunk passed. The assertion exists to catch a real bug (generator and planner disagreeing) before it becomes a
+  confusing primary-key collision.
+- **Lint complaints about `%` formatting and implicit string concatenation.** Fixed in code instead of silencing the rules: f-strings for
+  the audit JSON, parentheses around multi-line SQL strings, `enumerate()` for a counter. The `{{` `}}` in f-strings are literal braces.
+- **`ruff format` rewrote the files after I wrote them.** Harmless, and the reason the editor reported "file changed on disk".
+- **`est_rows = -1` in `pg_class.reltuples`.** Nobody has run `ANALYZE` yet, so the planner has no statistics. Step 4 runs it (except on
+  one table, on purpose, for planted problem P07).
+- **Windows multiprocessing starts fresh interpreters** ("spawn"), so worker functions must live at module level and everything sent to a
+  worker must be picklable. That is why shared data is in a small dataclass (`SeedContext`) passed to the pool once.
+- **COPY and row-level security.** `COPY ... FROM` is not allowed on a table with RLS for a normal role. It works for the `loader` because
+  it has `BYPASSRLS`. If you ever see "COPY FROM not supported with row-level security", that is the cause.
+
+### Known simplifications (so they do not surprise you later)
+
+- All prices and orders are in USD; the other currencies exist only as lookup rows.
+- Orders per month are flat (about 6,000 a month) instead of growing.
+- Addresses follow Faker's per-country format, but state or region names can be odd for a country (a US-style postcode in a GB address, etc.).
+- `inventory_movements` has the right shape (sales negative, receipts positive) but is not reconciled with `inventory.quantity_on_hand` or with order lines.
+- `order_items` has no tenant column and no RLS, so a tenant-1 reader can read every tenant's lines (seen in the test above). It is a deliberate,
+  realistic gap to test the MCP server against.
+- Speed: S loaded 4.6 million rows in 27 s, far faster than the 1-3 hours estimated for M. M has about 25 times the rows, so expect roughly
+  10-15 minutes. It will be measured in step 6, not assumed.
+
+### Concepts
+
+- **`COPY`** loads rows in bulk through the protocol instead of one INSERT per row. https://www.postgresql.org/docs/17/sql-copy.html and psycopg's
+  [copy support](https://www.psycopg.org/psycopg3/docs/basic/copy.html).
+- **Identity columns and sequences**: after loading explicit ids, the sequence must be moved past the maximum with `setval`, or the next INSERT would
+  collide. https://www.postgresql.org/docs/17/sql-createtable.html#SQL-CREATETABLE-PARMS-GENERATED-IDENTITY
+- **Determinism**: same seed, same data. Useful for tests, for comparing performance before and after a change, and for sharing a reproducible problem.
+- **splitmix64 hashing** (`mix` in `model.py`): a tiny, fast integer hash with good distribution; used so that "random" choices depend only on the id.
+- **Skewed (Zipf-like) data**: real data is rarely uniform. Here 1% of customers place about 30% of orders, which later breaks query-planner assumptions (P01).
+- **Python multiprocessing on Windows**: https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
