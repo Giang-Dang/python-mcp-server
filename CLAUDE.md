@@ -29,6 +29,7 @@ docker compose up -d --wait           # start Postgres (needs Docker Desktop run
 poetry run shopdb seed --scale S      # load data (S default, M for the big profile)
 poetry run shopdb verify              # seed checks (valid only on a freshly seeded database)
 poetry run shopdb post-load           # indexes, functions, triggers, procedures, ANALYZE, grants (db/post_load)
+poetry run shopdb docs                # regenerate docs/data-dictionary.md and docs/erd.md from the live catalog
 poetry run pytest                     # smoke tests
 poetry run fastmcp dev src/mcp_server/server.py   # MCP stub (ping, list_tables) in the Inspector
 .\db\workload\run.ps1 -Scenario browse|orders|hot|deadlock|mixed   # pgbench load, rolled back unless -Commit
@@ -44,6 +45,7 @@ Postgres client tools are not on the host: use `docker compose exec db psql -U p
 - ASCII only in source, SQL and docs. Never use the en-dash U+2013 or other look-alikes of ASCII
   punctuation; use `-` (including date ranges).
 - SQL: schema-qualified names (`shop.orders`), snake_case, numbered files that run in order,
+- Data access in `src/mcp_server/`: SQLAlchemy Core (`mcp_server/db.py`), no hand-written SQL strings for the server's own queries. Raw SQL is for `db/**/*.sql`, the seeder and tests, and for pass-through SQL (run with `exec_driver_sql`). See `docs/roadmap.md` section 4a.
   `COMMENT ON` for every table and important column (the data dictionary is generated from them).
 - Python 3.12+, ruff formatting (line length 100), type hints.
 - Seed data must be deterministic: fixed seeds, no wall-clock dependence.

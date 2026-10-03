@@ -15,7 +15,7 @@ from typing import Any
 from fastmcp import FastMCP
 from mcp_types import ToolAnnotations
 
-from shopdb.db import connect
+from mcp_server.db import engine_for, tables_query
 
 mcp = FastMCP(
     "shop-db",
@@ -29,19 +29,6 @@ mcp = FastMCP(
 READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
-
-# Regular tables and partitioned parents of the shop schema. Partitions (audit_log_2024_01, ...) are
-# hidden: they are an implementation detail of their parent.
-LIST_TABLES_SQL = """
-SELECT c.relname                              AS table_name,
-       c.relkind = 'p'                        AS is_partitioned,
-       greatest(c.reltuples, 0)::bigint       AS approx_rows,
-       obj_description(c.oid, 'pg_class')     AS comment
-FROM pg_class c
-JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'shop' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
-ORDER BY c.relname
-"""
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True))
@@ -57,12 +44,17 @@ def list_tables() -> list[dict[str, Any]]:
     The row count is the planner's estimate from pg_class.reltuples, not count(*): counting 30 million
     audit rows takes seconds, and the estimate is good enough to decide what to look at.
     """
-    # One short connection per call keeps the stub simple; a pool comes with the real server.
-    with connect("mcp_reader", autocommit=True) as conn:
-        rows = conn.execute(LIST_TABLES_SQL).fetchall()
+    # engine_for() returns a pooled engine for the mcp_reader role; the query is a Core expression, not SQL text.
+    with engine_for("mcp_reader").connect() as conn:
+        rows = conn.execute(tables_query()).all()
     return [
-        {"table": name, "partitioned": part, "approx_rows": rows_, "comment": comment}
-        for name, part, rows_, comment in rows
+        {
+            "table": r.table_name,
+            "partitioned": r.is_partitioned,
+            "approx_rows": r.approx_rows,
+            "comment": r.comment,
+        }
+        for r in rows
     ]
 
 

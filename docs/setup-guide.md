@@ -148,7 +148,7 @@ If you re-run this later without the lock file you may get newer versions; `poet
 ### Goal and why
 
 Start an empty-but-complete `shop` database: Postgres 17 in a container, five roles with different powers, the
-25 profile-S tables (plus 37 monthly partitions of the audit log), three views, and row-level security (RLS).
+25 profile-S tables (plus 36 monthly partitions and a default partition of the audit log), three views, and row-level security (RLS).
 No data yet; the seeder comes in step 3.
 
 Why now, and in this order:
@@ -1005,3 +1005,166 @@ $ poetry run fastmcp call src/mcp_server/server.py list_tables
 - **FastMCP**: https://gofastmcp.com
 - **stdio transport**: https://modelcontextprotocol.io/specification/ (Transports section)
 - **`pg_class.reltuples`** (planner row estimate): https://www.postgresql.org/docs/17/catalog-pg-class.html
+
+---
+
+## Step 9: Final documentation (generated data dictionary and ERD, hand-written roadmap)
+
+### Goal and why
+
+Three documents were still missing, and they are different in kind, so they are produced differently:
+
+| Document | Kind | How |
+|---|---|---|
+| `docs/data-dictionary.md` | Facts about the database | **Generated** by `poetry run shopdb docs` from the live catalog and `COMMENT ON` text |
+| `docs/erd.md` | Facts (the foreign keys) | **Generated** (Mermaid) from `pg_constraint` |
+| `docs/roadmap.md` | Decisions and plans for the next phase | **Written by hand** |
+
+Why generate instead of writing: a hand-written dictionary starts to drift the day after it is written (a column is added, a comment changes). A generated one is correct by construction, and
+`tests/test_docgen.py` fails if a table or column loses its description. An ERD drawn by hand can show a relationship that does not exist; this one is built from the real foreign keys.
+The roadmap is the opposite case: it records choices and open questions, which no catalog can tell you.
+
+Alternatives rejected: a schema-documentation tool such as SchemaSpy (a Java dependency and a heavy HTML output for something that fits in two markdown files); drawing the ERD in an image editor (cannot be regenerated, cannot be diffed).
+
+### The prerequisite that was missing: column comments
+
+The generator can only print what is in the database, and **only 8 of the 193 columns had a `COMMENT ON`** (tables were all commented in step 2). A dictionary built from that would have been mostly empty.
+This matters beyond documentation: a model writing SQL through the MCP server has only names and comments to go on. So the first part of the step was `db/post_load/160_comments.sql`.
+
+- Why a **post_load** file and not an edit of `db/schema/*.sql`: schema files only run when the data volume is created, so editing them would not reach the running database without a rebuild (about 8 minutes at M). Comments are metadata; the file applies in a second and is re-runnable (an existing comment is left alone).
+- Every description was checked against the database before being written. Several of my first drafts were wrong and were corrected: invoice numbers have 9 digits not 8; `provider_ref`, `tracking_number`, `shipped_at`, `size` and `color` are never NULL in the data; barcodes are distinct but no constraint enforces it; the products' category ids are 21-200.
+  Lesson: a comment that sounds plausible and is wrong is worse than none.
+
+### Commands
+
+```powershell
+poetry run shopdb post-load --only 160     # add the column comments (applied 193/193; second run changes nothing)
+poetry run shopdb docs                     # writes docs/data-dictionary.md and docs/erd.md (use --out DIR for another folder)
+poetry run pytest tests/test_docgen.py -v  # 4 tests
+```
+
+### What each part does and why it is needed
+
+- **`src/shopdb/docgen.py`** reads the catalog with six queries and renders markdown. The ones worth understanding:
+  - `pg_class` / `pg_attribute` / `pg_attrdef`: tables, columns, types (`format_type`), defaults. `NOT relispartition` hides the 37 `audit_log` partitions behind their parent.
+  - `pg_constraint` with `conparentid = 0`: Postgres copies constraints onto every partition; this keeps only the original.
+  - `obj_description` / `col_description`: read the `COMMENT ON` text.
+  - `pg_get_constraintdef`, `pg_get_indexdef`, `pg_get_triggerdef`, `pg_get_function_identity_arguments`: Postgres prints its own definitions, so the doc shows what the database really has.
+  - `pg_policies`: the row-level security policies.
+- **Deterministic output**: no timestamps and sorted queries, so regenerating on an unchanged database gives byte-identical files (clean `git diff`; tested).
+- **ERD cardinality**: a nullable foreign key column draws `|o--o{` (parent optional), a NOT NULL one draws `||--o{`.
+- **`shopdb docs` runs as `shop_owner`** (it only reads catalogs, which any role can read).
+
+### Files created
+
+- `db/post_load/160_comments.sql`, `src/shopdb/docgen.py`, `tests/test_docgen.py`
+- `docs/data-dictionary.md` (25 tables, 3 views, 40 routines, 3 RLS policies), `docs/erd.md` (38 foreign keys), `docs/roadmap.md`
+- `src/shopdb/cli.py`: new `docs` command
+
+### Expected output (real)
+
+```
+$ poetry run shopdb post-load --only 160
+applied 160_comments.sql (0.0s)
+1 file(s) applied
+$ poetry run shopdb docs
+wrote docs\data-dictionary.md
+wrote docs\erd.md
+$ poetry run pytest tests/test_docgen.py -q
+4 passed
+```
+
+The ERD was also checked with Mermaid's own parser (mermaid 11 run under Node, `mermaid.parse`): `PARSE OK`, diagram type `er`. That proves the syntax is valid; it was not rendered to an image here.
+GitHub renders ` ```mermaid ` blocks, as do VS Code (with a Mermaid extension) and most markdown viewers.
+
+### Troubleshooting and things that were not obvious
+
+- **Doubled backslashes are collapsed by the tool layer I work through**, which broke one generator edit (a `\n` became a real newline inside a string literal and ruff reported `missing closing quote`) and earlier put a carriage return into `CLAUDE.md`.
+  Not a Postgres or Python issue; the fix was to edit with a tool that does not process escapes and to re-read every edited file. If you ever see `\r` or a stray line break where a Windows path or `\n` should be, suspect this.
+- **`Path(...)` as a typer default** triggers lint rule B008 (a function call in an argument default). The option is a plain string converted inside the function, like the other commands.
+- **A table of 25 may look like 28**: `shop` also contains three views (`v_order_summary`, `v_low_stock`, and the materialized view `mv_daily_sales`). The dictionary lists them separately.
+- **Row counts in the dictionary are estimates** (`pg_class.reltuples`) and depend on the loaded profile, so regenerating at S gives different numbers than at M. That is stated at the top of the file.
+- **Comment coverage is now a test.** If you add a table or column, add its `COMMENT ON` (in `db/schema` for a new table, or `160_comments.sql`), or `tests/test_docgen.py` fails.
+
+### Concepts
+
+- **System catalogs (`pg_class`, `pg_attribute`, `pg_constraint`, `pg_description`)**: https://www.postgresql.org/docs/17/catalogs.html
+- **COMMENT**: https://www.postgresql.org/docs/17/sql-comment.html
+- **Mermaid entity-relationship diagrams**: https://mermaid.js.org/syntax/entityRelationshipDiagram.html
+
+---
+
+## Step 10: Move the MCP server's data access to SQLAlchemy Core
+
+### Goal and why
+
+Until now `list_tables` in the MCP stub was a hand-written SQL string run through psycopg. You asked why: raw SQL should belong to the seeding phase, not to the server's tools.
+For the server's **own** queries that is the better design, so the stub was changed and the rule was recorded (`CLAUDE.md`, `docs/roadmap.md` section 4a).
+
+What SQLAlchemy gives the server:
+- **A connection pool per role** (`engine_for("mcp_reader")`). The stub opened a new connection on every call; the real server needs a pool anyway (it was open question 5 in the roadmap).
+- **Queries as Python expressions** (`select(...)`) over described tables, so the compiler builds the SQL and every value is a bound parameter. Nobody can build a query by pasting strings.
+- **Helpers** such as `pool_pre_ping` (drops dead connections) and a single place to reset session state later.
+
+Which part of SQLAlchemy: **Core, not the ORM.** The ORM maps tables to Python classes. This server has no domain objects; it relays whatever a query returns. There is nothing to map, so the ORM would add weight and no value.
+
+**Where SQLAlchemy cannot help (important):** SQL that a person or a model writes and asks the server to run (`execute_sql` in the next phase) is text, not something the server builds.
+SQLAlchemy cannot make that safe. The protections there stay what the roadmap says: the classifier, the role privileges, and human approval. It will be executed with
+`Connection.exec_driver_sql`, because the plain `text()` wrapper treats `:name` inside the SQL as a bind parameter and would corrupt valid queries.
+
+Alternatives rejected: `psycopg_pool` alone (a pool but no query building); the ORM (see above); keeping raw SQL strings (works, but every new tool would repeat the string-building risks).
+
+### Commands
+
+```powershell
+poetry add "sqlalchemy>=2.0"                    # installed SQLAlchemy 2.1.3; psycopg 3 was already present (dialect "postgresql+psycopg")
+poetry run pytest tests/test_mcp_stub.py -v     # 5 tests
+poetry run fastmcp call src/mcp_server/server.py list_tables
+```
+
+### What changed and why
+
+- **`src/mcp_server/db.py`** (new)
+  - `engine_for(role)`: builds the connection URL with `URL.create(...)` (not string formatting, so special characters in a password are safe) and caches one engine per role.
+    `pool_size=3, max_overflow=2` keeps the number of connections small (the container allows 50); `pool_reset_on_return="rollback"` means a connection is never returned to the pool inside an open transaction.
+  - `pg_class` and `pg_namespace` described as `Table` objects in the `pg_catalog` schema. SQLAlchemy does not need them created: it only needs to know their columns to build a query.
+  - `tables_query()`: the same query as before, as a `select()`. It hides partitions (`relispartition IS false`), reports `reltuples` clamped at zero, and reads the comment with `obj_description`.
+- **`src/mcp_server/server.py`**: `list_tables` now calls `engine_for("mcp_reader")` and `tables_query()`. The SQL string constant is gone.
+- **`tests/test_mcp_stub.py`**: a fifth test checks that each engine connects as the role it was asked for (`current_user`) and that there is one pool per role.
+
+The SQL that SQLAlchemy generates (for the record; all values are bound):
+
+```sql
+SELECT pg_catalog.pg_class.relname AS table_name, pg_catalog.pg_class.relkind = %(relkind_1)s::VARCHAR AS is_partitioned,
+       CAST(greatest(pg_catalog.pg_class.reltuples, %(greatest_1)s::INTEGER) AS BIGINT) AS approx_rows,
+       obj_description(pg_catalog.pg_class.oid, %(obj_description_1)s::VARCHAR) AS comment
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace
+WHERE pg_catalog.pg_namespace.nspname = %(nspname_1)s::VARCHAR AND pg_catalog.pg_class.relkind IN (...)
+  AND pg_catalog.pg_class.relispartition IS false
+ORDER BY pg_catalog.pg_class.relname
+```
+
+### Expected output (real)
+
+```
+$ poetry run pytest tests/test_mcp_stub.py -q
+5 passed
+$ poetry run fastmcp call src/mcp_server/server.py list_tables
+{"result": [{"table": "addresses", "partitioned": false, "approx_rows": 2000004, "comment": "Shipping and billing addresses owned by a customer."}, ...
+```
+
+Same 25 tables and comments as before the change: the behaviour did not change, only how the query is built.
+
+### Troubleshooting and things that were not obvious
+
+- **Use an absolute import (`from mcp_server.db import ...`) in `server.py`.** `fastmcp run src/mcp_server/server.py` loads the file by path, where a relative import (`from .db import ...`) fails because the file is not part of a package at that moment. The package is installed in the virtualenv (editable), so the absolute form works both ways.
+- **`ruff --fix` replaced `lru_cache(maxsize=None)` with `functools.cache`.** Same behaviour, newer spelling.
+- **A pooled connection keeps session state.** `SET something` run on a pooled connection stays set for the next caller. Rolling back on return does not undo a `SET`. This is harmless for `list_tables`, but matters for pass-through SQL (a client could `SET app.tenant_id`). Recorded as roadmap question 5.
+- **The tests and the seeder still use plain psycopg and SQL.** That is intended: the rule is about the server's own queries, and the SQL files define the database.
+
+### Concepts
+
+- **SQLAlchemy Core and the engine/pool**: https://docs.sqlalchemy.org/en/20/core/engines.html
+- **Core vs ORM**: https://docs.sqlalchemy.org/en/20/tutorial/index.html
+- **Table metadata and `select()`**: https://docs.sqlalchemy.org/en/20/tutorial/data_select.html
+- **Connection pooling**: https://docs.sqlalchemy.org/en/20/core/pooling.html
