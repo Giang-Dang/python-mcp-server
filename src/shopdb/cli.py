@@ -37,7 +37,7 @@ def seed_command(
     ),
 ) -> None:
     """Fill the database with generated data."""
-    from .loader import run_seed
+    from .bootstrap import run_seed
 
     settings = get_settings()
     chosen = get_scale(scale or settings.shop_scale)
@@ -52,6 +52,7 @@ def seed_command(
             seed if seed is not None else settings.shop_seed,
             workers,
             force=force,
+            settings=settings,
             log=typer.echo,
         )
     except RuntimeError as exc:
@@ -65,7 +66,7 @@ def verify(
     seed: int = typer.Option(None, "--seed", help="Seed the database was seeded with."),
 ) -> None:
     """Check row counts and data consistency against the model."""
-    from .verify import run_verify
+    from .bootstrap import run_verify
 
     settings = get_settings()
     results = run_verify(
@@ -88,7 +89,7 @@ def post_load_command(
     ),
 ) -> None:
     """Apply db/post_load/*.sql (indexes, functions, triggers, procedures, statistics, grants) as shop_owner."""
-    from .postload import apply_post_load
+    from .bootstrap import apply_post_load
 
     try:
         count = apply_post_load(only=only, log=typer.echo)
@@ -118,7 +119,7 @@ def docs_command(
     """Regenerate docs/data-dictionary.md and docs/erd.md from the live database catalog."""
     from pathlib import Path
 
-    from .docgen import generate
+    from .bootstrap import generate
 
     for path in generate(Path(out)):
         typer.echo(f"wrote {path}")
