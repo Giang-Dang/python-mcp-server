@@ -21,6 +21,32 @@ class NoDatabaseServices:
         pass
 
 
+GUIDANCE_REQUESTS = [
+    ("resources/list", {}),
+    ("resources/templates/list", {}),
+    ("resources/read", {"uri": "shop://guide/schema"}),
+    ("prompts/list", {}),
+    ("prompts/get", {"name": "explore_schema", "arguments": {"table": "orders"}}),
+    (
+        "prompts/get",
+        {"name": "investigate_slow_query", "arguments": {"sql": "SELECT 1"}},
+    ),
+]
+
+
+def rpc(client, token, session, method, params):
+    return client.post(
+        "/mcp",
+        headers=headers(token, session),
+        json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params},
+    )
+
+
+def assert_no_guidance(response):
+    for text in ("# Shop schema guide", "Explore the shop schema", "Investigate the supplied SQL"):
+        assert text not in response.text
+
+
 def controlled_auth(monkeypatch, settings):
     key = RSAKeyPair.generate()
     metadata = SimpleNamespace(
@@ -93,8 +119,11 @@ def http_server(monkeypatch):
     "case",
     ["missing", "forged", "expired", "issuer", "audience", "subject", "expiry", "not_yet_valid"],
 )
-def test_http_rejects_invalid_authentication(http_server, case):
+@pytest.mark.parametrize("method, params", [("tools/list", {})] + GUIDANCE_REQUESTS)
+def test_http_rejects_invalid_authentication(http_server, case, method, params):
     client, key, settings = http_server
+    valid = key.create_token(issuer=settings.issuer, audience=settings.resource_url, kid="test")
+    session = initialize(client, valid).headers["mcp-session-id"]
     kwargs = {"issuer": settings.issuer, "audience": settings.resource_url, "kid": "test"}
     if case == "forged":
         key = RSAKeyPair.generate()
@@ -113,12 +142,10 @@ def test_http_rejects_invalid_authentication(http_server, case):
     token = None if case == "missing" else key.create_token(**kwargs)
     response = initialize(client, token)
     assert response.status_code == 401, response.text
-    discovery = client.post(
-        "/mcp",
-        headers=headers(token),
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-    )
-    assert discovery.status_code == 401
+    for current_session in (None, session):
+        denied = rpc(client, token, current_session, method, params)
+        assert denied.status_code == 401, denied.text
+        assert_no_guidance(denied)
 
 
 def test_metadata_discovery_equal_access_and_ping(http_server):
@@ -177,6 +204,74 @@ def test_metadata_discovery_equal_access_and_ping(http_server):
         json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
     )
     assert swapped.status_code in (400, 403, 404) or "error" in swapped.json(), swapped.text
+
+
+@pytest.mark.parametrize("subject", ["developer-a", "developer-b"])
+def test_http_guidance_discovery_and_retrieval(http_server, subject):
+    client, key, settings = http_server
+    token = key.create_token(
+        subject=subject, issuer=settings.issuer, audience=settings.resource_url, kid="test"
+    )
+    init = initialize(client, token)
+    assert init.json()["result"]["protocolVersion"] == "2025-11-25"
+    capabilities = init.json()["result"]["capabilities"]
+    assert {"tools", "resources", "prompts"} <= capabilities.keys()
+    session = init.headers["mcp-session-id"]
+    resources = rpc(client, token, session, "resources/list", {}).json()["result"]["resources"]
+    assert {r["uri"]: r["name"] for r in resources} == {
+        "shop://guide/schema": "schema_guide",
+        "shop://guide/relationships": "relationships_guide",
+        "shop://policy/sql": "sql_policy",
+    }
+    assert rpc(client, token, session, "resources/templates/list", {}).json()["result"] == {
+        "resourceTemplates": []
+    }
+    for resource in resources:
+        response = rpc(client, token, session, "resources/read", {"uri": resource["uri"]})
+        assert "error" not in response.json(), response.text
+        contents = response.json()["result"]["contents"]
+        assert len(contents) == 1
+        assert contents[0]["mimeType"] == "text/markdown"
+        assert contents[0]["text"]
+        assert "test_reader" not in response.text
+        assert "test_audit" not in response.text
+    prompts = rpc(client, token, session, "prompts/list", {}).json()["result"]["prompts"]
+    assert {p["name"] for p in prompts} == {"explore_schema", "investigate_slow_query"}
+    for name, arguments in (
+        ("explore_schema", {}),
+        ("explore_schema", {"table": "orders"}),
+        ("investigate_slow_query", {"sql": "SELECT 1"}),
+    ):
+        response = rpc(
+            client, token, session, "prompts/get", {"name": name, "arguments": arguments}
+        )
+        assert "error" not in response.json(), response.text
+        messages = response.json()["result"]["messages"]
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"]["type"] == "text"
+
+
+@pytest.mark.parametrize("method, params", GUIDANCE_REQUESTS)
+def test_guidance_rejects_cross_user_session_reuse(http_server, method, params):
+    client, key, settings = http_server
+    tokens = [
+        key.create_token(
+            subject=subject, issuer=settings.issuer, audience=settings.resource_url, kid="test"
+        )
+        for subject in ("developer-a", "developer-b")
+    ]
+    session = initialize(client, tokens[0]).headers["mcp-session-id"]
+    # Bind a guidance request to the first caller before attempting reuse.
+    assert (
+        "error"
+        not in rpc(
+            client, tokens[0], session, "resources/read", {"uri": "shop://guide/schema"}
+        ).json()
+    )
+    denied = rpc(client, tokens[1], session, method, params)
+    assert denied.status_code in (400, 403, 404) or "error" in denied.json(), denied.text
+    assert_no_guidance(denied)
 
 
 def test_host_and_origin_protection(http_server):

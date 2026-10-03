@@ -1,10 +1,7 @@
 from fastmcp import Context
-from fastmcp.exceptions import ToolError
-from fastmcp.server.middleware import Middleware
 from mcp_types import ToolAnnotations
 
 from mcp_server.adapters.identity.auth0 import current_principal
-from mcp_server.core.errors import GuardError
 
 READ = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
@@ -12,25 +9,6 @@ READ = ToolAnnotations(
 WRITE = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
 )
-
-
-class IdentityMiddleware(Middleware):
-    def __init__(self, identity):
-        self.identity = identity
-
-    async def on_request(self, context, call_next):
-        try:
-            principal = self.identity()
-            if context.fastmcp_context is not None:
-                ctx = context.fastmcp_context
-                prior = await ctx.get_state("shopmcp_identity")
-                identity = list(principal.identity)
-                if prior is not None and prior != identity:
-                    raise ToolError("authentication: session belongs to a different caller")
-                await ctx.set_state("shopmcp_identity", identity)
-        except GuardError as exc:
-            raise ToolError(f"{exc.category}: {exc}") from None
-        return await call_next(context)
 
 
 class ElicitationApprover:
@@ -48,8 +26,6 @@ class ElicitationApprover:
 
 
 def register_tools(mcp, services, identity=current_principal):
-    mcp.add_middleware(IdentityMiddleware(identity))
-
     @mcp.tool(annotations=READ)
     async def ping() -> str:
         """Authenticated liveness; independent of shop and audit availability."""

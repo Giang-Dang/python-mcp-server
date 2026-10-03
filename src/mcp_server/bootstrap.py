@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from fastmcp import FastMCP
 
 from mcp_server.adapters.identity.auth0 import current_principal, make_auth
+from mcp_server.adapters.mcp.middleware import IdentityMiddleware
+from mcp_server.adapters.mcp.prompts import register_prompts
+from mcp_server.adapters.mcp.resources import register_resources
 from mcp_server.adapters.mcp.tools import register_tools
 from mcp_server.adapters.postgres.audit import PostgresAudit
 from mcp_server.adapters.postgres.database import Database
@@ -70,8 +73,16 @@ def create_server(settings: Settings | None = None, *, auth=None, services=None,
         auth=auth,
         lifespan=lifespan,
         tasks=False,
-        instructions="Authenticated guarded SQL. Mutations require human approval. Never retry uncertain outcomes.",
+        instructions=(
+            "Authenticated guarded SQL. Mutations require human approval. Never retry uncertain "
+            "outcomes. Discover shop:// guidance resources and the explore_schema and "
+            "investigate_slow_query prompts for schema and read-plan workflows."
+        ),
         mask_error_details=True,
     )
-    register_tools(mcp, services, identity or current_principal)
+    identity = identity or current_principal
+    mcp.add_middleware(IdentityMiddleware(identity))
+    register_tools(mcp, services, identity)
+    register_resources(mcp, settings.limits)
+    register_prompts(mcp, settings.limits)
     return mcp
