@@ -27,7 +27,8 @@ The plan lives in `C:\Users\dangv\.claude\plans\agreed-create-plan-to-atomic-pik
 poetry install                         # create .venv and install dependencies
 docker compose up -d --wait           # start Postgres (needs Docker Desktop running)
 poetry run shopdb seed --scale S      # load data (S default, M for the big profile)
-poetry run shopdb verify              # row counts and FK integrity
+poetry run shopdb verify              # seed checks (valid only on a freshly seeded database)
+poetry run shopdb post-load           # indexes, functions, triggers, procedures, ANALYZE, grants (db/post_load)
 poetry run pytest                     # smoke tests
 poetry run ruff check . ; poetry run ruff format .
 ```
@@ -47,10 +48,15 @@ Postgres client tools are not on the host: use `docker compose exec db psql -U p
 
 ## Safety rules
 
+- Once `shopdb post-load` has run, triggers exist and `shopdb seed` refuses to run (it would fire them for every row).
+  To start over: `docker compose down -v` (ask first), `docker compose up -d --wait`, `shopdb seed`, `shopdb post-load`.
+- `tests/sql/step4_checks.sql` is safe (one rolled-back transaction); it still advances sequences. Never run `archive_old_orders`,
+  `bulk_update_prices`, `purge_abandoned_carts` or `recalc_customer_tiers` against the real data without asking.
 - Ask before `docker compose down -v`, `shopdb reset` or anything else that destroys the data volume.
-- The planted performance problems (P01-P12 in `docs/planted-problems.md`) are intentional.
+- The planted performance problems (P01-P13 in `docs/planted-problems.md`, written in step 5) are intentional.
   Do not "fix" them with extra indexes or rewrites unless asked.
-- Default scale is S. Do not start an M seed (hours, 10-15 GB) without asking.
+- Default scale in the repo is S. M is 105M rows, 19 GB and about 5 minutes to seed; do not start an M seed without asking.
+  The local `.env` may say `SHOP_SCALE=M` (it is git-ignored); `shopdb verify` and the integration tests follow it.
 - Never commit `.env`. Do not run mutating SQL against the database without the user's approval.
 
 ## Documentation rule (important)

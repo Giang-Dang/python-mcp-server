@@ -3,6 +3,10 @@
 -- Run as the postgres superuser:
 --   docker compose exec -T db psql -U postgres -d shop -v ON_ERROR_STOP=1 < tests/sql/step2_checks.sql
 -- The last block creates temporary rows inside a transaction and rolls it back.
+--
+-- EMPTY DATABASE ONLY: check 10 inserts tenants 1 and 2, so on a seeded database it stops with
+-- "duplicate key value violates unique constraint tenants_pkey". Checks 1-9 are still valid then.
+-- For row-level security against real data use tests/test_seed_integrity.py instead.
 
 \echo '== 1. server and preload libraries'
 SELECT version();

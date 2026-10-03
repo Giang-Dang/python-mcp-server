@@ -25,6 +25,7 @@ from .db import connect
 from .generators import CHUNK_SIZES, REGISTRY
 from .generators.static import static_tables
 from .model import ORDER_CHUNK, compute_order_layout, ranges
+from .postload import has_post_load_triggers
 
 Log = Callable[[str], None]
 
@@ -159,6 +160,12 @@ def run_seed(
     loaded: Counter[str] = Counter()
 
     with connect("loader", settings) as conn:
+        if has_post_load_triggers(conn):
+            raise RuntimeError(
+                "Triggers exist in schema shop (db/post_load was applied). Loading would fire them for every row and "
+                "corrupt the data. To re-seed, recreate the database volume (docker compose down -v; docker compose "
+                "up -d --wait), then seed, then run `shopdb post-load`."
+            )
         existing = conn.execute(
             "SELECT (SELECT count(*) FROM shop.tenants) + (SELECT count(*) FROM shop.orders)"
         ).fetchone()[0]
