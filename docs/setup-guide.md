@@ -924,3 +924,84 @@ Nothing visible changed after all of this (rollbacks): orders 5,000,000, order_i
 - **pg_stat_statements**: https://www.postgresql.org/docs/17/pgstatstatements.html
 - **Monitoring views (`pg_stat_activity`, `pg_locks`, `pg_blocking_pids`)**: https://www.postgresql.org/docs/17/monitoring-stats.html
 - **Explicit locking and deadlocks**: https://www.postgresql.org/docs/17/explicit-locking.html
+
+---
+
+## Step 8: MCP stub (prove the whole chain before adding any logic)
+
+### Goal and why
+
+The next project phase is a "guarded SQL" server with real logic (classify SQL, ask before mutating, allowlisted procedures). Before writing any of that,
+this step builds the smallest possible server and checks that **every link of the chain works**:
+
+`MCP client -> FastMCP server -> shopdb.db.connect("mcp_reader") -> Postgres 17 (RLS, grants, comments)`
+
+If something fails later, you will know it is the new logic and not the setup. It also teaches the three FastMCP basics (server object, tool decorator, annotations)
+on something too small to hide mistakes.
+
+Design choices (and what was rejected):
+- **Two tools only**: `ping` (no database) and `list_tables` (read-only). `ping` separates "the server works" from "the database works".
+- **`list_tables` uses `pg_class.reltuples`, not `count(*)`**: counting `audit_log` takes seconds (P09). The estimate is instant and good enough for "what exists".
+- **It connects as `mcp_reader`**, the role the real server will use for reads, so the stub already runs under the same restrictions: SELECT only, RLS on tenant 1, 15 s statement timeout.
+- **A connection per call, no pool**: simplest correct thing for a stub. A pool belongs to the real server.
+- **Reusing `shopdb.db.connect`** instead of a second connection module: one place knows how to build the connection string and read passwords. (Later the MCP server may get its own settings; that is a decision for the next phase.)
+- **FastMCP version**: 4.0.10 is installed. It is newer than most tutorials, so the API was read from the installed package (`.venv/Lib/site-packages/fastmcp`) rather than from memory.
+  It sits on the MCP Python SDK v2 (`mcp_types`), which renamed annotation fields to snake_case: `ToolAnnotations(read_only_hint=True)`, not `readOnlyHint`.
+
+### Commands
+
+```powershell
+poetry run pytest tests/test_mcp_stub.py -v                       # in-memory client, 4 tests
+poetry run fastmcp list src/mcp_server/server.py                  # launches the server over stdio and lists its tools
+poetry run fastmcp call src/mcp_server/server.py list_tables      # calls a tool over stdio
+poetry run fastmcp dev src/mcp_server/server.py                   # opens the MCP Inspector in a browser (interactive)
+```
+
+### What each part does and why it is needed
+
+- **`FastMCP("shop-db", instructions=...)`** creates the server. `instructions` is text the client shows to the model about how to use the server.
+- **`@mcp.tool(annotations=ToolAnnotations(...))`** registers a function as a tool. The type hints become the input schema, the docstring becomes the description the model reads (so write it for the model).
+  `read_only_hint`, `destructive_hint`, `idempotent_hint`, `open_world_hint` are **hints** for the client's UI (for example whether to ask for confirmation). They are not enforcement.
+  The enforcement is the database role: `mcp_reader` has no write privileges.
+- **`mcp.run()`** serves over **stdio** (the client starts the server as a subprocess and talks over its stdin/stdout). Because stdout is the protocol channel, never `print()` in a server; logs go to stderr.
+- **`Client(mcp)`** in the tests connects a real MCP client to the server object **in memory**: same protocol messages, no subprocess, fast and deterministic.
+- **`fastmcp list|call`** starts the server for real as a stdio subprocess: this is what Claude Code or Claude Desktop will do.
+- **`asyncio.run(...)` in the tests**: the client is async; wrapping it avoids adding a pytest plugin for one test file.
+
+### Files created
+
+- `src/mcp_server/server.py` - the stub server (`ping`, `list_tables`)
+- `tests/test_mcp_stub.py` - 4 tests: tools and annotations, ping, the 25 tables (no partitions, all with comments), and the write barrier
+
+### Expected output (real)
+
+```
+$ poetry run pytest tests/test_mcp_stub.py -q
+4 passed in 2.19s
+$ poetry run pytest -q
+35 passed
+$ poetry run fastmcp list src/mcp_server/server.py
+Tools (2)
+  ping() -> dict
+  list_tables() -> dict
+$ poetry run fastmcp call src/mcp_server/server.py list_tables
+{"result": [{"table": "addresses", "partitioned": false, "approx_rows": 2000004, "comment": "Shipping and billing addresses owned by a customer."},
+            {"table": "audit_log", "partitioned": true, "approx_rows": 29993916, ...}, ...]}
+```
+
+### Troubleshooting and things that were not obvious
+
+- **The write-barrier test failed first**, with `ReadOnlySqlTransaction` instead of `InsufficientPrivilege`. Two lessons:
+  1. `mcp_reader` has `default_transaction_read_only = on`, and Postgres checks that **before** privileges, so a plain UPDATE is refused for the advisory reason and proves nothing about grants.
+  2. Running `SET default_transaction_read_only = off` inside psycopg's default transaction did not help either: psycopg had already issued `BEGIN` (read-only), and the setting does not change a transaction in progress.
+  The test now uses an `autocommit=True` connection, switches the setting off, and then the UPDATE fails with `InsufficientPrivilege`. That proves the missing privilege is the real barrier. This is exactly the "defence in depth" point for the guarded server: the read-only default is a convenience, **grants are the guarantee**.
+- **A list return value is wrapped** as `{"result": [...]}` and the CLI shows `-> dict`: FastMCP builds an output schema that must be an object, so non-object returns are wrapped.
+- **Formatting**: ruff wanted a long assert message wrapped; run `poetry run ruff format .` before committing.
+- **Not done on purpose**: the server is not registered in any MCP client config (Claude Code, Claude Desktop, VS Code). To try it from Claude Code later: `claude mcp add shop-db -- poetry run fastmcp run src/mcp_server/server.py` run from the repo root. That edits your client configuration, so it is your call.
+
+### Concepts
+
+- **MCP tools and annotations**: https://modelcontextprotocol.io/specification/ (Tools section)
+- **FastMCP**: https://gofastmcp.com
+- **stdio transport**: https://modelcontextprotocol.io/specification/ (Transports section)
+- **`pg_class.reltuples`** (planner row estimate): https://www.postgresql.org/docs/17/catalog-pg-class.html
