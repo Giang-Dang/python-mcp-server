@@ -20,6 +20,11 @@ shopdb = "shopdb.cli:app"
 shopmcp = "mcp_server.cli:app"
 
 [tool.poetry]
+exclude = ["src/mcp_server/adapters/mcp/query_plan_viewer/node_modules/**"]
+include = [
+    { path = "src/mcp_server/adapters/mcp/query_plan_viewer/viewer.html", format = ["sdist", "wheel"] },
+    { path = "src/mcp_server/adapters/mcp/skills/**/*.md", format = ["sdist", "wheel"] },
+]
 packages = [
     { include = "shopdb", from = "src" },
     { include = "mcp_server", from = "src" },

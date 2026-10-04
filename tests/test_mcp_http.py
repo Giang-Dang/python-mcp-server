@@ -242,7 +242,7 @@ def test_http_guidance_discovery_and_retrieval(http_server, subject):
             "result"
         ]
         resources.extend(page["resources"])
-    assert len(resources) == 3
+    assert len(resources) == 6
     resources = [r for r in resources if r["uri"].startswith("shop://")]
     assert {r["uri"]: r["name"] for r in resources} == {
         "shop://guide/schema": "schema_guide",

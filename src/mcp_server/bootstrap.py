@@ -12,7 +12,9 @@ from mcp_server.adapters.mcp.completion import register_completion
 from mcp_server.adapters.mcp.middleware import IdentityMiddleware
 from mcp_server.adapters.mcp.prompts import register_prompts
 from mcp_server.adapters.mcp.resources import register_resources
+from mcp_server.adapters.mcp.skills import SkillsExtension
 from mcp_server.adapters.mcp.tools import register_tools
+from mcp_server.adapters.mcp.viewer import register_viewer
 from mcp_server.adapters.postgres.audit import PostgresAudit
 from mcp_server.adapters.postgres.database import Database
 from mcp_server.adapters.postgres.engines import make_engine
@@ -95,5 +97,9 @@ def create_server(settings: Settings | None = None, *, auth=None, services=None,
     register_tools(mcp, services, identity, rounds)
     register_resources(mcp, settings.limits, services, identity)
     register_prompts(mcp, settings.limits)
+    register_viewer(mcp)
     register_completion(mcp, services, identity)
+    skills = SkillsExtension(identity, settings.list_page_size)
+    mcp.add_extension(skills)
+    skills.register_files(mcp)
     return mcp

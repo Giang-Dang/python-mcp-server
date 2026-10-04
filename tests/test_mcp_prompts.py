@@ -19,7 +19,7 @@ def test_client_discovers_and_renders_two_user_message_prompts():
             prompts = {p.name: p for p in await client.list_prompts()}
             assert set(prompts) == {"explore_schema", "investigate_slow_query"}
             assert len(await client.list_tools()) == 9
-            assert len(await client.list_resources()) == 3
+            assert len(await client.list_resources()) == 6
             for name, argument, required in (
                 ("explore_schema", "table", False),
                 ("investigate_slow_query", "sql", True),

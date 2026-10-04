@@ -1,9 +1,11 @@
 from fastmcp import Context
+from fastmcp.apps.config import AppConfig
 from mcp_types import ToolAnnotations
 
 from mcp_server.adapters.identity.auth0 import current_principal
 from mcp_server.adapters.mcp.approval import ApprovalRounds
 from mcp_server.adapters.mcp.schemas import DiagnosticsResponse, ExplainResponse
+from mcp_server.adapters.mcp.viewer import VIEWER_URI
 
 READ = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
@@ -45,6 +47,7 @@ def register_tools(mcp, services, identity=current_principal, rounds=None):
     @mcp.tool(
         annotations=READ,
         output_schema=ExplainResponse.model_json_schema(by_alias=True),
+        app=AppConfig(resource_uri=VIEWER_URI),
     )
     async def explain(sql: str) -> dict:
         """Return a non-ANALYZE plan for permitted read SQL. Costs and rows are estimates."""
