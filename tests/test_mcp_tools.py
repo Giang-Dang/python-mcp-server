@@ -37,11 +37,13 @@ def test_mcp_client_elicitation_approve_decline_and_missing():
             async def elicit(message, response_type, params, context, decision=decision, seen=seen):
                 seen.append(message)
                 if decision == "approve":
-                    return {"value": True}
+                    return {"approve": True}
                 return ElicitResult(action="decline" if decision == "decline" else "cancel")
 
             async with Client(
-                server, mode="legacy", elicitation_handler=None if decision == "missing" else elicit
+                server,
+                mode="2026-07-28",
+                elicitation_handler=None if decision == "missing" else elicit,
             ) as client:
                 assert (await client.call_tool("ping", {})).data == "pong"
                 result = await client.call_tool(

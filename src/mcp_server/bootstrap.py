@@ -4,8 +4,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from fastmcp import FastMCP
+from mcp.server.request_state import RequestStateSecurity
 
 from mcp_server.adapters.identity.auth0 import current_principal, make_auth
+from mcp_server.adapters.mcp.approval import ApprovalRounds
+from mcp_server.adapters.mcp.completion import register_completion
 from mcp_server.adapters.mcp.middleware import IdentityMiddleware
 from mcp_server.adapters.mcp.prompts import register_prompts
 from mcp_server.adapters.mcp.resources import register_resources
@@ -60,11 +63,13 @@ def create_server(settings: Settings | None = None, *, auth=None, services=None,
     settings = settings or Settings()
     auth = auth if auth is not None else make_auth(settings)
     services = services if services is not None else build_services(settings)
+    rounds = ApprovalRounds()
 
     @asynccontextmanager
     async def lifespan(_):
         try:
-            yield {}
+            async with rounds.lifespan():
+                yield {}
         finally:
             await services.close()
 
@@ -73,6 +78,11 @@ def create_server(settings: Settings | None = None, *, auth=None, services=None,
         auth=auth,
         lifespan=lifespan,
         tasks=False,
+        list_page_size=settings.list_page_size,
+        request_state_security=RequestStateSecurity.ephemeral(
+            ttl=settings.approval_seconds, audience="shop-db"
+        ),
+        # No cache hints: SDK rejects TTL=0, and a scope without a positive TTL.
         instructions=(
             "Authenticated guarded SQL. Mutations require human approval. Never retry uncertain "
             "outcomes. Discover shop:// guidance resources and the explore_schema and "
@@ -82,7 +92,8 @@ def create_server(settings: Settings | None = None, *, auth=None, services=None,
     )
     identity = identity or current_principal
     mcp.add_middleware(IdentityMiddleware(identity))
-    register_tools(mcp, services, identity)
-    register_resources(mcp, settings.limits)
+    register_tools(mcp, services, identity, rounds)
+    register_resources(mcp, settings.limits, services, identity)
     register_prompts(mcp, settings.limits)
+    register_completion(mcp, services, identity)
     return mcp

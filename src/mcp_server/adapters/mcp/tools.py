@@ -2,6 +2,8 @@ from fastmcp import Context
 from mcp_types import ToolAnnotations
 
 from mcp_server.adapters.identity.auth0 import current_principal
+from mcp_server.adapters.mcp.approval import ApprovalRounds
+from mcp_server.adapters.mcp.schemas import DiagnosticsResponse, ExplainResponse
 
 READ = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
@@ -11,21 +13,9 @@ WRITE = ToolAnnotations(
 )
 
 
-class ElicitationApprover:
-    def __init__(self, context: Context):
-        self.context = context
+def register_tools(mcp, services, identity=current_principal, rounds=None):
+    rounds = rounds or ApprovalRounds()
 
-    async def request(self, message: str) -> str:
-        try:
-            result = await self.context.elicit(message, response_type=bool)
-        except Exception:  # noqa: BLE001 - any unavailable or malformed elicitation fails closed
-            return "unavailable"
-        if result.action == "accept":
-            return "approved" if result.data is True else "declined"
-        return "declined" if result.action == "decline" else "cancelled"
-
-
-def register_tools(mcp, services, identity=current_principal):
     @mcp.tool(annotations=READ)
     async def ping() -> str:
         """Authenticated liveness; independent of shop and audit availability."""
@@ -50,12 +40,17 @@ def register_tools(mcp, services, identity=current_principal):
     @mcp.tool(annotations=WRITE)
     async def execute(sql: str, ctx: Context) -> dict:
         """Preview one targeted INSERT, UPDATE, or DELETE and ask the human before execution."""
-        return await services.sql.run(identity(), "execute", sql, ElicitationApprover(ctx))
+        return await rounds.run(ctx, identity(), "execute", {"sql": sql}, services.sql)
 
-    @mcp.tool(annotations=READ)
+    @mcp.tool(
+        annotations=READ,
+        output_schema=ExplainResponse.model_json_schema(by_alias=True),
+    )
     async def explain(sql: str) -> dict:
         """Return a non-ANALYZE plan for permitted read SQL. Costs and rows are estimates."""
-        return await services.sql.run(identity(), "explain", sql)
+        result = await services.sql.run(identity(), "explain", sql)
+        ExplainResponse.model_validate(result)
+        return result
 
     @mcp.tool(annotations=READ)
     async def list_procedures() -> dict:
@@ -65,9 +60,17 @@ def register_tools(mcp, services, identity=current_principal):
     @mcp.tool(annotations=WRITE)
     async def call_procedure(name: str, args: dict, ctx: Context) -> dict:
         """Validate a registered procedure, verify its definition, and request human approval."""
-        return await services.procedures.call(identity(), name, args, ElicitationApprover(ctx))
+        return await rounds.run(
+            ctx,
+            identity(),
+            "call_procedure",
+            {"name": name, "arguments": args},
+            services.procedures,
+        )
 
-    @mcp.tool(annotations=READ)
+    @mcp.tool(annotations=READ, output_schema=DiagnosticsResponse.model_json_schema(by_alias=True))
     async def diagnostics(kind: str) -> dict:
         """Fixed report: query_statistics, locks, table_sizes, or table_health."""
-        return await services.diagnostics.run(identity(), kind)
+        result = await services.diagnostics.run(identity(), kind)
+        DiagnosticsResponse.model_validate(result)
+        return result

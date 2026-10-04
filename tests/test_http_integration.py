@@ -24,7 +24,7 @@ def test_authenticated_http_sql_approval_batch_and_audit(monkeypatch):
         auth, keys = controlled_auth(monkeypatch, settings)
         services = build_services(settings)
         mcp = create_server(settings, auth=auth, services=services)
-        app = mcp.http_app(path="/mcp", host_origin_protection=True)
+        app = mcp.http_app(path="/mcp", host_origin_protection=True, stateless_http=True)
         server = uvicorn.Server(uvicorn.Config(app, log_level="error", lifespan="on"))
         task = asyncio.create_task(server.serve(sockets=[sock]))
         try:
@@ -45,11 +45,11 @@ def test_authenticated_http_sql_approval_batch_and_audit(monkeypatch):
                 previews.append(message)
                 decision = next(decisions)
                 return ElicitResult(
-                    action=decision, content={"value": True} if decision == "accept" else None
+                    action=decision, content={"approve": True} if decision == "accept" else None
                 )
 
             async with Client(
-                settings.resource_url, auth=token, mode="legacy", elicitation_handler=elicit
+                settings.resource_url, auth=token, mode="2026-07-28", elicitation_handler=elicit
             ) as client:
                 assert len(await client.list_tools()) == 9
                 assert (await client.call_tool("ping", {})).data == "pong"
@@ -97,7 +97,13 @@ def test_authenticated_http_sql_approval_batch_and_audit(monkeypatch):
                         (committed["operation_id"],),
                     )
                 ]
-                assert kinds == ["approval", "execution_intent", "commit_intent", "outcome"]
+                assert kinds == [
+                    "awaiting_approval",
+                    "approval",
+                    "execution_intent",
+                    "commit_intent",
+                    "outcome",
+                ]
                 caller = conn.execute(
                     "SELECT issuer, subject, inputs FROM audit.operations WHERE operation_id=%s",
                     (committed["operation_id"],),

@@ -1,8 +1,10 @@
-"""Register only the three reviewed documentation resources."""
+"""Reviewed documentation and bounded live table metadata."""
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError
+from fastmcp.resources.base import ResourceContent, ResourceResult
 
+from mcp_server.core.access_control.application import canonical
 from mcp_server.core.errors import GuardError
 from mcp_server.core.guidance.resources import (
     render_relationships_guide,
@@ -12,7 +14,23 @@ from mcp_server.core.guidance.resources import (
 from mcp_server.core.sql_access.domain import Limits
 
 
-def register_resources(mcp: FastMCP, limits: Limits) -> None:
+def register_resources(mcp: FastMCP, limits: Limits, services, identity) -> None:
+    @mcp.resource(
+        "shop://tables/{table}",
+        name="table_metadata",
+        description="Live column metadata for one unqualified shop table; no table rows.",
+        mime_type="application/json",
+    )
+    async def table_metadata(table: str) -> ResourceResult:
+        result = await services.catalog.read_table(identity(), table)
+        if "error" in result:
+            error = result["error"]
+            raise ResourceError(f"{error['category']}: {error['message']}")
+        return ResourceResult(
+            contents=[ResourceContent(canonical(result["data"]), mime_type="application/json")],
+            meta={"operation_id": result["operation_id"]},
+        )
+
     @mcp.resource(
         "shop://guide/schema",
         name="schema_guide",

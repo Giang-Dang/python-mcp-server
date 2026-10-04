@@ -29,6 +29,7 @@ from .queries import (
     definitions_query,
     describe_query,
     diagnostics_query,
+    table_names_query,
     tables_query,
 )
 from .statements import ProcedureCall
@@ -175,6 +176,9 @@ class Database:
         if not result["rows"]:
             raise GuardError(Category.ARGUMENTS, "Table not found in the configured shop schema.")
         return result
+
+    async def complete_tables(self, prefix):
+        return await self.fixed(table_names_query(prefix, self.settings.schema_name))
 
     async def diagnostics(self, kind):
         return await self.fixed(diagnostics_query(kind, self.settings.schema_name), "mcp_monitor")

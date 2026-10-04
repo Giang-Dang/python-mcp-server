@@ -14,7 +14,7 @@ def test_client_discovers_and_renders_two_user_message_prompts():
 
     async def run():
         async with Client(
-            guidance_server(), mode="legacy", elicitation_handler=forbidden_elicitation
+            guidance_server(), mode="2026-07-28", elicitation_handler=forbidden_elicitation
         ) as client:
             prompts = {p.name: p for p in await client.list_prompts()}
             assert set(prompts) == {"explore_schema", "investigate_slow_query"}
@@ -60,7 +60,7 @@ def test_client_discovers_and_renders_two_user_message_prompts():
 )
 def test_client_get_prompt_rejects_invalid_input_without_echoing_sql(name, arguments, message):
     async def run():
-        async with Client(guidance_server(), mode="legacy") as client:
+        async with Client(guidance_server(), mode="2026-07-28") as client:
             with pytest.raises(McpError) as error:
                 await client.get_prompt(name, arguments)
             assert message in str(error.value)
@@ -71,7 +71,7 @@ def test_client_get_prompt_rejects_invalid_input_without_echoing_sql(name, argum
 
 def test_prompt_uses_instance_request_limit():
     async def run():
-        async with Client(guidance_server(request_bytes=1024), mode="legacy") as client:
+        async with Client(guidance_server(request_bytes=1024), mode="2026-07-28") as client:
             with pytest.raises(McpError, match="1024-byte"):
                 await client.get_prompt("investigate_slow_query", {"sql": "s" * 1015})
             result = await client.get_prompt("investigate_slow_query", {"sql": "s" * 1014})

@@ -34,9 +34,12 @@ class Audit:
         tool: str,
         inputs: dict,
         action: Callable[[str], Awaitable[dict | list]],
+        *,
+        operation_id: str | None = None,
     ) -> dict:
-        operation_id = str(uuid4())
-        started = False
+        resuming = operation_id is not None
+        operation_id = operation_id or str(uuid4())
+        started = resuming
         result = None
         try:
             principal.require_valid(time.time())
@@ -49,11 +52,14 @@ class Audit:
             if size > self.limits.request_bytes:
                 raise GuardError(Category.LIMIT, "Request exceeds the configured byte limit.")
             operation = Operation(operation_id, principal, tool, inputs, asdict(self.limits))
-            try:
-                await self.store.start(operation)
-                started = True
-            except Exception:  # noqa: BLE001 - fail closed for any audit adapter failure
-                raise GuardError(Category.AUDIT, "Audit intent could not be persisted.") from None
+            if not resuming:
+                try:
+                    await self.store.start(operation)
+                    started = True
+                except Exception:  # noqa: BLE001 - fail closed for any audit adapter failure
+                    raise GuardError(
+                        Category.AUDIT, "Audit intent could not be persisted."
+                    ) from None
             result = await action(operation_id)
             outcome = (
                 result.get("outcome", "completed") if isinstance(result, dict) else "completed"
@@ -70,7 +76,10 @@ class Audit:
                 ):
                     if key in result:
                         detail[key] = result[key]
-            await self.event(operation_id, "outcome", detail)
+            if outcome == "awaiting_approval":
+                await self.event(operation_id, "awaiting_approval")
+            else:
+                await self.event(operation_id, "outcome", detail)
             return {
                 "operation_id": operation_id,
                 "outcome": outcome,

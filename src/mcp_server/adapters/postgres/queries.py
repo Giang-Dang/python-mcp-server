@@ -94,6 +94,21 @@ def describe_query(name, schema="shop"):
     )
 
 
+def table_names_query(prefix, schema="shop"):
+    return (
+        select(relation.c.relname.label("table"))
+        .join(namespace, namespace.c.oid == relation.c.relnamespace)
+        .where(
+            namespace.c.nspname == schema,
+            relation.c.relkind.in_(("r", "p")),
+            relation.c.relispartition.is_(False),
+            relation.c.relname.startswith(prefix, autoescape=True),
+        )
+        .order_by(relation.c.relname)
+        .limit(101)
+    )
+
+
 def definition_query(signature):
     return select(func.pg_get_functiondef(func.to_regprocedure(signature)))
 

@@ -31,14 +31,17 @@ def test_client_discovers_and_reads_three_markdown_resources(monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
 
     async def run():
-        async with Client(server, mode="legacy") as client:
-            resources = await client.list_resources()
+        async with Client(server, mode="2026-07-28") as client:
+            resources = [
+                r for r in await client.list_resources() if str(r.uri).startswith("shop://")
+            ]
             assert {str(r.uri): r.name for r in resources} == {
                 "shop://guide/schema": "schema_guide",
                 "shop://guide/relationships": "relationships_guide",
                 "shop://policy/sql": "sql_policy",
             }
-            assert await client.list_resource_templates() == []
+            templates = await client.list_resource_templates()
+            assert [t.uri_template for t in templates] == ["shop://tables/{table}"]
             assert len(await client.list_tools()) == 9
             for resource in resources:
                 assert resource.description
@@ -59,7 +62,7 @@ def test_resource_policy_is_per_instance_and_arbitrary_uris_are_rejected(tmp_pat
 
     async def run():
         for rows in (7, 19):
-            async with Client(guidance_server(result_rows=rows), mode="legacy") as client:
+            async with Client(guidance_server(result_rows=rows), mode="2026-07-28") as client:
                 policy = (await client.read_resource("shop://policy/sql"))[0].text
                 assert f"| result_rows | {rows} |" in policy
                 for uri in ("shop://guide/unknown", private_file.as_uri()):

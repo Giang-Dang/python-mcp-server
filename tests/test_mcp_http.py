@@ -37,8 +37,19 @@ GUIDANCE_REQUESTS = [
 def rpc(client, token, session, method, params):
     return client.post(
         "/mcp",
-        headers=headers(token, session),
-        json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params},
+        headers=headers(token, session)
+        | {"MCP-Method": method}
+        | (
+            {"MCP-Name": params.get("name", params.get("uri"))}
+            if "name" in params or "uri" in params
+            else {}
+        ),
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": method,
+            "params": {**params, "_meta": modern_meta()},
+        },
     )
 
 
@@ -80,7 +91,7 @@ def controlled_auth(monkeypatch, settings):
 
 
 def headers(token=None, session=None):
-    result = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"}
+    result = {"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2026-07-28"}
     if token:
         result["Authorization"] = "Bearer " + token
     if session:
@@ -88,21 +99,17 @@ def headers(token=None, session=None):
     return result
 
 
+def modern_meta(capabilities=None):
+    return {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "acceptance-test", "version": "1"},
+        "io.modelcontextprotocol/clientCapabilities": capabilities or {},
+    }
+
+
 def initialize(client, token):
-    return client.post(
-        "/mcp",
-        headers=headers(token),
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "acceptance-test", "version": "1"},
-            },
-        },
-    )
+    # Kept as the test helper name; modern discovery has no initialization/session.
+    return rpc(client, token, None, "server/discover", {})
 
 
 @pytest.fixture
@@ -110,7 +117,9 @@ def http_server(monkeypatch):
     settings = server_settings()
     auth, key = controlled_auth(monkeypatch, settings)
     server = create_server(settings, auth=auth, services=NoDatabaseServices())
-    app = server.http_app(path="/mcp", json_response=True, host_origin_protection=True)
+    app = server.http_app(
+        path="/mcp", json_response=True, stateless_http=True, host_origin_protection=True
+    )
     with TestClient(app, base_url=settings.base_url) as client:
         yield client, key, settings
 
@@ -122,8 +131,7 @@ def http_server(monkeypatch):
 @pytest.mark.parametrize("method, params", [("tools/list", {})] + GUIDANCE_REQUESTS)
 def test_http_rejects_invalid_authentication(http_server, case, method, params):
     client, key, settings = http_server
-    valid = key.create_token(issuer=settings.issuer, audience=settings.resource_url, kid="test")
-    session = initialize(client, valid).headers["mcp-session-id"]
+    session = "legacy-session-must-not-be-used"
     kwargs = {"issuer": settings.issuer, "audience": settings.resource_url, "kid": "test"}
     if case == "forged":
         key = RSAKeyPair.generate()
@@ -163,23 +171,36 @@ def test_metadata_discovery_equal_access_and_ping(http_server):
         tokens.append(token)
         init = initialize(client, token)
         assert init.status_code == 200, init.text
-        session = init.headers["mcp-session-id"]
+        assert init.json()["result"]["supportedVersions"] == ["2026-07-28"]
+        assert "mcp-session-id" not in init.headers
+        session = None
         sessions.append(session)
         response = client.post(
             "/mcp",
-            headers=headers(token, session),
-            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            headers=headers(token, session) | {"MCP-Method": "tools/list"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": modern_meta()},
+            },
         )
         assert "error" not in response.json(), response.text
-        lists.append({t["name"] for t in response.json()["result"]["tools"]})
+        names = {t["name"] for t in response.json()["result"]["tools"]}
+        cursor = response.json()["result"].get("nextCursor")
+        while cursor:
+            page = rpc(client, token, None, "tools/list", {"cursor": cursor}).json()["result"]
+            names.update(t["name"] for t in page["tools"])
+            cursor = page.get("nextCursor")
+        lists.append(names)
         pong = client.post(
             "/mcp",
-            headers=headers(token, session),
+            headers=headers(token, session) | {"MCP-Method": "tools/call", "MCP-Name": "ping"},
             json={
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "ping", "arguments": {}},
+                "params": {"name": "ping", "arguments": {}, "_meta": modern_meta()},
             },
         )
         assert "pong" in pong.text, pong.text
@@ -198,12 +219,8 @@ def test_metadata_discovery_equal_access_and_ping(http_server):
             "diagnostics",
         }
     )
-    swapped = client.post(
-        "/mcp",
-        headers=headers(tokens[1], sessions[0]),
-        json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
-    )
-    assert swapped.status_code in (400, 403, 404) or "error" in swapped.json(), swapped.text
+    # Stateless requests authenticate independently; no reusable session ownership.
+    assert sessions == [None, None]
 
 
 @pytest.mark.parametrize("subject", ["developer-a", "developer-b"])
@@ -213,19 +230,29 @@ def test_http_guidance_discovery_and_retrieval(http_server, subject):
         subject=subject, issuer=settings.issuer, audience=settings.resource_url, kid="test"
     )
     init = initialize(client, token)
-    assert init.json()["result"]["protocolVersion"] == "2025-11-25"
+    assert "error" not in init.json()
     capabilities = init.json()["result"]["capabilities"]
     assert {"tools", "resources", "prompts"} <= capabilities.keys()
-    session = init.headers["mcp-session-id"]
-    resources = rpc(client, token, session, "resources/list", {}).json()["result"]["resources"]
+    assert "mcp-session-id" not in init.headers
+    session = None
+    page = rpc(client, token, session, "resources/list", {}).json()["result"]
+    resources = list(page["resources"])
+    while page.get("nextCursor"):
+        page = rpc(client, token, session, "resources/list", {"cursor": page["nextCursor"]}).json()[
+            "result"
+        ]
+        resources.extend(page["resources"])
+    assert len(resources) == 3
+    resources = [r for r in resources if r["uri"].startswith("shop://")]
     assert {r["uri"]: r["name"] for r in resources} == {
         "shop://guide/schema": "schema_guide",
         "shop://guide/relationships": "relationships_guide",
         "shop://policy/sql": "sql_policy",
     }
-    assert rpc(client, token, session, "resources/templates/list", {}).json()["result"] == {
-        "resourceTemplates": []
-    }
+    templates = rpc(client, token, session, "resources/templates/list", {}).json()["result"][
+        "resourceTemplates"
+    ]
+    assert [t["uriTemplate"] for t in templates] == ["shop://tables/{table}"]
     for resource in resources:
         response = rpc(client, token, session, "resources/read", {"uri": resource["uri"]})
         assert "error" not in response.json(), response.text
@@ -252,26 +279,25 @@ def test_http_guidance_discovery_and_retrieval(http_server, subject):
         assert messages[0]["content"]["type"] == "text"
 
 
-@pytest.mark.parametrize("method, params", GUIDANCE_REQUESTS)
-def test_guidance_rejects_cross_user_session_reuse(http_server, method, params):
+def test_legacy_initialize_is_rejected(http_server):
     client, key, settings = http_server
-    tokens = [
-        key.create_token(
-            subject=subject, issuer=settings.issuer, audience=settings.resource_url, kid="test"
-        )
-        for subject in ("developer-a", "developer-b")
-    ]
-    session = initialize(client, tokens[0]).headers["mcp-session-id"]
-    # Bind a guidance request to the first caller before attempting reuse.
-    assert (
-        "error"
-        not in rpc(
-            client, tokens[0], session, "resources/read", {"uri": "shop://guide/schema"}
-        ).json()
+    token = key.create_token(issuer=settings.issuer, audience=settings.resource_url, kid="test")
+    response = client.post(
+        "/mcp",
+        headers=headers(token) | {"MCP-Protocol-Version": "2025-11-25"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "legacy", "version": "1"},
+            },
+        },
     )
-    denied = rpc(client, tokens[1], session, method, params)
-    assert denied.status_code in (400, 403, 404) or "error" in denied.json(), denied.text
-    assert_no_guidance(denied)
+    assert response.status_code != 200 or "error" in response.json()
+    assert "mcp-session-id" not in response.headers
 
 
 def test_host_and_origin_protection(http_server):

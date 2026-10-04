@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     schema_name: str = "shop"
     tenant_id: int = Field(default=1, ge=1)
     registry_path: Path = ROOT / "config" / "procedures.yaml"
+    list_page_size: int = Field(default=5, ge=1, le=100)
     request_bytes: int = Field(default=65536, ge=1024, le=65536)
     result_rows: int = Field(default=1000, ge=1, le=10000)
     result_bytes: int = Field(default=1048576, ge=256, le=16777216)

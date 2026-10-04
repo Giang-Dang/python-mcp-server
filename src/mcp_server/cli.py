@@ -28,6 +28,7 @@ def serve():
             host=settings.host,
             port=settings.port,
             path="/mcp",
+            stateless_http=True,
             host_origin_protection=True,
             allowed_hosts=[f"127.0.0.1:{settings.port}", f"localhost:{settings.port}"],
             allowed_origins=["http://localhost:6274", "http://127.0.0.1:6274"],

@@ -48,6 +48,27 @@ def test_catalog_streamed_reads_plans_and_diagnostics():
     with_services(run)
 
 
+def test_live_table_resource_completion_and_output_contracts():
+    async def run(s):
+        from mcp_server.adapters.mcp.schemas import DiagnosticsResponse, ExplainResponse
+
+        metadata = await s.catalog.read_table(principal(), "orders")
+        assert "error" not in metadata, metadata
+        described = await s.catalog.describe_table(principal(), "orders")
+        assert metadata["data"]["columns"] == [
+            dict(zip(described["data"]["columns"], row, strict=True))
+            for row in described["data"]["rows"]
+        ]
+        completion = await s.catalog.complete_tables(principal(), "order")
+        assert "orders" in completion["data"]["values"], completion
+        assert all(name.startswith("order") for name in completion["data"]["values"])
+        ExplainResponse.model_validate(await s.sql.run(principal(), "explain", "SELECT 1"))
+        for kind in ("query_statistics", "locks", "table_sizes", "table_health"):
+            DiagnosticsResponse.model_validate(await s.diagnostics.run(principal(), kind))
+
+    with_services(run)
+
+
 def test_byte_limit_and_request_policy():
     async def run(s):
         result = await s.sql.run(principal(), "query", "SELECT description FROM shop.products")

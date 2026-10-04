@@ -2,7 +2,7 @@ import time
 from dataclasses import asdict
 
 from mcp_server.core.access_control.application import Approver, obtain_approval, verify_approval
-from mcp_server.core.access_control.domain import Principal
+from mcp_server.core.access_control.domain import Approval, Principal
 from mcp_server.core.auditing.application import Audit
 from mcp_server.core.errors import Category, GuardError
 
@@ -22,6 +22,58 @@ class SQLAccess:
     ):
         self.parser, self.database, self.audit = parser, database, audit
         self.limits, self.schema = limits, schema
+
+    async def prepare(self, principal: Principal, sql: str) -> dict:
+        async def action(_):
+            analysis = authorize(self.parser.analyze(sql), "execute", self.schema)
+            plan = await self.database.preview(sql, "mcp_writer")
+            if plan["total_cost_estimate"] > self.limits.plan_cost:
+                raise GuardError(
+                    Category.LIMIT, "Planner cost estimate exceeds the configured ceiling."
+                )
+            return {
+                "outcome": "awaiting_approval",
+                "preview": {
+                    "sql": sql,
+                    "effects": f"Direct {analysis.kind}; triggers may cause additional changes.",
+                    "plan": plan,
+                    "limits": asdict(self.limits),
+                    "rollback_note": "The row cap counts direct rows only. Rollback does not restore sequence values.",
+                    "transaction_mode": "atomic",
+                },
+            }
+
+        return await self.audit.run(principal, "execute", {"sql": sql}, action)
+
+    async def resume(
+        self, principal: Principal, sql: str, preview: dict, approval: Approval
+    ) -> dict:
+        async def action(operation_id):
+            await self.audit.event(operation_id, "approval", asdict(approval))
+            verify_approval(approval, principal, operation_id, preview)
+            if preview["sql"] != sql or preview["limits"] != asdict(self.limits):
+                raise GuardError(
+                    Category.POLICY, "Approved request or limits changed.", "cancelled"
+                )
+            authorize(self.parser.analyze(sql), "execute", self.schema)
+            plan = await self.database.preview(sql, "mcp_writer")
+            if plan["total_cost_estimate"] > self.limits.plan_cost:
+                raise GuardError(
+                    Category.LIMIT, "Planner cost estimate exceeds the configured ceiling."
+                )
+            await self.audit.event(operation_id, "execution_intent")
+            verify_approval(approval, principal, operation_id, preview)
+
+            async def before_commit():
+                verify_approval(approval, principal, operation_id, preview)
+                await self.audit.event(operation_id, "commit_intent")
+                verify_approval(approval, principal, operation_id, preview)
+
+            return await self.database.mutate(sql, before_commit)
+
+        return await self.audit.run(
+            principal, "execute", {"sql": sql}, action, operation_id=approval.operation_id
+        )
 
     async def run(
         self, principal: Principal, tool: str, sql: str, approver: Approver | None = None
