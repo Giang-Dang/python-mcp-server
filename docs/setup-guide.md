@@ -1924,3 +1924,193 @@ required manual client acceptance.
 - [MCP prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts): retrieval renders messages for the host/user to use.
 - [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle): legacy initialization negotiates capabilities, not counts.
 - [FastMCP middleware](https://gofastmcp.com/servers/middleware): identity/session checks span all MCP surfaces.
+
+
+## Step 19: MCP evolution, modern approval and frontend build (2026-10-04)
+
+### Goal and why
+
+Implement native discovery pagination and bounded table resources before the
+protocol migration, then verify modern MRTR approval, typed output and the App.
+Use the installed Python environment rather than reinstalling working locked
+dependencies. Bundle the official Apps SDK locally; CDN scripts would require
+external network permissions at runtime. Tasks stay disabled.
+
+### Commands actually run
+
+All Python commands below ran from F:\repo\python-mcp-server. The temporary
+root/cache stays inside the workspace because host cache directories deny access.
+
+```powershell
+$env:PYTEST_DEBUG_TEMPROOT='F:\repo\python-mcp-server\.scratch'
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_catalog.py tests/test_mcp_resources.py -q -o cache_dir=.scratch/pytest-cache
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_tools.py tests/test_mcp_catalog.py tests/test_mcp_resources.py tests/test_guarded_core.py -q -o cache_dir=.scratch/pytest-cache
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_tools.py tests/test_mcp_catalog.py tests/test_mcp_resources.py -q -o cache_dir=.scratch/pytest-cache --tb=short
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_mrtr.py tests/test_mcp_http.py tests/test_mcp_prompts.py -q -o cache_dir=.scratch/pytest-cache --tb=short
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_schemas.py tests/test_mcp_http.py -q -o cache_dir=.scratch/pytest-cache --tb=short
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_schemas.py tests/test_mcp_http.py tests/test_mcp_mrtr.py -q -o cache_dir=.scratch/pytest-cache --tb=short
+```
+
+These execute behavioral checks without a live database. First milestone:
+6 passed in 11.03s. Modern client checks: 7 passed in 2.25s. Modern HTTP,
+schema and MRTR checks after fixes: 85 passed in 19.48s.
+
+Frontend commands ran from src/mcp_server/adapters/mcp/query_plan_viewer:
+
+```powershell
+npm.cmd install --cache F:\repo\python-mcp-server\.scratch\npm-cache --no-audit --no-fund
+npm.cmd test
+npm.cmd run build
+```
+
+Install created node_modules (ignored) and package-lock.json: added 37 packages
+in 4s. Node tests exercise the DOM with linkedom. Build bundles the SDK and the
+viewer into viewer.html, with all styles/scripts inline. First build succeeded:
+Built viewer.html (603395 script bytes; no external assets).
+
+### Actual failures and fixes
+
+- FastMCP rejects cache_ttl=0 and cache_scope without a positive TTL. Omit cache
+  hints: the SDK emits ttlMs=0/cacheScope=private by default, preserving no caching.
+- Client mode="modern" is invalid in this SDK. Use mode="2026-07-28".
+- Raw modern HTTP requires MCP-Method and MCP-Name matching the request method
+  and name/URI. Tests now supply them alongside per-request _meta.
+- FastMCP simplifies JSON Schema discriminator metadata into oneOf branches.
+  Verify each branch's kind const instead of expecting the discriminator keyword.
+- npm view initially failed with EPERM in the host npm cache. Repeated it with
+  --cache .scratch/npm-cache; resolved versions: ext-apps 2.0.3, esbuild 0.28.2,
+  linkedom 0.18.13. No escalation or global configuration change was needed.
+- npm blocked esbuild's postinstall script under its allowScripts policy.
+  The platform binary dependency was present and build worked without approving
+  additional install scripts.
+- First frontend run: 3 passed, 1 failed because cyclic fixture JSON serialization
+  threw. Safe JSON display now catches this; verification is recorded below.
+
+### Files and concepts
+
+The plan is docs/mcp-evolution-plan.md. New production files include the MRTR
+adapter, output schemas, App adapter and bundled frontend. Tests and subsequent
+verification results are recorded with the implementation milestones.
+No environment secret, live mutation, seed, migration or volume reset was run.
+
+- https://gofastmcp.com/servers/pagination
+- https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr
+- https://modelcontextprotocol.io/specification/2026-07-28/basic/transports
+- https://modelcontextprotocol.io/extensions/apps/overview
+- https://skills.extensions.modelcontextprotocol.io/specification/stable/skills
+
+
+## Step 20: Reproducible package and isolated acceptance (2026-10-04)
+
+### Goal and why
+
+Verify the final code through the real Postgres adapters and loopback HTTP, then
+check the distributable assets. Start the existing isolated container rather than
+rebuilding, resetting or seeding its volume. Do not run fresh-seed integrity
+checks against a database already used by procedures. Keep live port 5433 out of
+the acceptance workflow. The implementation request authorizes the planned
+isolated acceptance; host access was granted by automatic sandbox review.
+
+### Commands actually run
+
+From F:\repo\python-mcp-server:
+
+```powershell
+poetry run pytest -q -o cache_dir=.scratch/pytest-cache
+$env:PYTEST_DEBUG_TEMPROOT='F:\repo\python-mcp-server\.scratch'
+.\.venv\Scripts\python.exe -m pytest -q -o cache_dir=.scratch/pytest-cache --tb=short
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+poetry build --output dist
+```
+
+The Poetry launcher initially failed to canonicalize its script path in the
+sandbox. Tests used the installed .venv directly. The package build succeeded
+with host access to Poetry's existing tool environment; no backend installation
+or dependency upgrade was required. Outputs: dist/python_mcp_server-0.1.0.tar.gz
+and dist/python_mcp_server-0.1.0-py3-none-any.whl. An archive inspection using
+Python zipfile/tarfile verified viewer.html, SKILL.md and references/checklist.md
+in both archives and the absence of node_modules. The first wheel was 250231 bytes.
+
+The first full suite found one old inventory assertion (3 resources); the new
+inventory is 6. After fixing it, the suite passed 201 tests with 49 database tests
+skipped in 33.86s. A further cancellation regression test was added before the
+final run below. Ruff initially reported import order/unused locals, then mixed
+line endings in three edited tests; targeted fix/format commands resolved them.
+No formatter changed the SQL fixtures or planted problems.
+
+Docker startup/status commands:
+
+```powershell
+docker compose -f tests/compose.yml ps --format json
+docker desktop start --help
+docker desktop start --detach
+docker compose -f tests/compose.yml ps --all --format json
+docker compose -f tests/compose.yml start --wait
+```
+
+Initial Docker inspection failed because the engine pipe was absent. The default
+sandbox also could not read Docker's host config; host inspection confirmed the
+Docker Desktop Linux engine was stopped. Starting Docker Desktop returned
+Starting Docker Desktop. The existing shopmcp-test-db-1 container was stopped;
+its verified binding was 127.0.0.1:55439 -> 5432. start --wait brought this same
+container to Healthy without creating or deleting a volume. No server was pointed
+at live port 5433, and no seed or migration was run.
+
+Isolated checks use controlled credentials from tests/support.py, not .env:
+
+```powershell
+$env:SHOP_TEST_DATABASE='isolated'
+$env:PYTEST_DEBUG_TEMPROOT='F:\repo\python-mcp-server\.scratch'
+.\.venv\Scripts\python.exe -m pytest tests/test_guarded_integration.py tests/test_http_integration.py tests/test_guarded_failures.py tests/test_planted.py -q -o cache_dir=.scratch/pytest-cache --tb=short
+```
+
+Real first result: 40 passed in 11.64s. This covers table resource/catalog parity,
+Core prefix lookup, real explain/diagnostics DTO validation, modern authenticated
+HTTP approvals/procedure calls, transaction failures and unchanged planted
+problems. One cache warning reported WinError 5 when concurrent runs shared the
+same cache directory; final runs use distinct cache directories below.
+
+Frontend commands, from src/mcp_server/adapters/mcp/query_plan_viewer:
+
+```powershell
+npm.cmd ci --cache F:\repo\python-mcp-server\.scratch\npm-cache --no-audit --no-fund
+npm.cmd test
+npm.cmd run build
+```
+
+The clean lockfile install added 37 packages in 2s. esbuild postinstall remained
+blocked; the installed platform binary built successfully without new script
+approval. Four tests passed; build produced viewer.html with 603488 script bytes.
+The artifact uses ASCII, inline styles/scripts and no external assets.
+
+Final rerun commands (separate PowerShell processes):
+
+```powershell
+$env:PYTEST_DEBUG_TEMPROOT='F:\repo\python-mcp-server\.scratch'
+.\.venv\Scripts\python.exe -m pytest -q -o cache_dir=.scratch/pytest-cache-default --tb=short
+$env:SHOP_TEST_DATABASE='isolated'
+.\.venv\Scripts\python.exe -m pytest tests/test_guarded_integration.py tests/test_http_integration.py tests/test_guarded_failures.py tests/test_planted.py -q -o cache_dir=.scratch/pytest-cache-isolated --tb=short
+poetry build --output dist
+```
+
+Final results: default suite 202 passed / 49 skipped in 37.24s; isolated MCP
+acceptance 40 passed in 13.68s, without the earlier cache warning. Ruff check
+passed, 151 files were already formatted, and git diff --check passed. The final
+wheel and sdist build succeeded. The additional targeted MRTR/tools/HTTP run
+passed 88 tests in 12.89s after cancellation/expiry fixes.
+
+### Verification boundaries and concepts
+
+The computer-use inventory returned apps=[] and browsers=[]. DOM tests and
+protocol metadata checks do not prove rendering in a real Inspector iframe or
+host skill activation. Those manual checks remain pending. Inspector must use
+protocolEra=modern; SDK clients use mode="2026-07-28". Existing runtime processes
+were not restarted as part of these tests. Tasks remain disabled by design.
+
+- https://docs.docker.com/reference/cli/docker/desktop/start/
+- https://docs.docker.com/reference/cli/docker/compose/start/
+- https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr
+- https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/recipes
+- https://apps.extensions.modelcontextprotocol.io/api/classes/app.App.html
+- https://skills.extensions.modelcontextprotocol.io/specification/stable/skills

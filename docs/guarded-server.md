@@ -138,7 +138,7 @@ Driver errors and credentials are withheld from tool responses.
 ## Resources, prompts and discovery
 
 Three packaged Markdown resources and two read-oriented prompts share the tools'
-identity/session protection. See [MCP discovery and client usage](mcp-discovery.md)
+per-request identity protection. See [MCP discovery and client usage](mcp-discovery.md)
 for inventories, argument limits, SDK examples and how the host connects an LLM.
 Documentation reads and prompt renders start no database operation and create no
 audit rows. Database tools retain mandatory intent/outcome auditing. Retrieving a
@@ -181,9 +181,26 @@ The preview closes its database connection before asking the human. It shows exa
 SQL/arguments, effects, estimates, limits, registry fingerprint, and transaction mode.
 Approval is bound to the operation and caller. Unsupported elicitation, decline,
 cancellation, changed inputs, expired approval, or expired identity stops execution.
-The installed FastMCP imperative elicitation path requires a handshake-era MCP
-client; automated clients use `mode="legacy"`. A client negotiating a modern
-protocol without that back-channel receives a refusal, never silent execution.
+The server supports only protocol 2026-07-28. Use SDK mode="2026-07-28" and
+Inspector protocolEra=modern. An initial mutation request returns input_required
+with an approval form and SDK-sealed requestState. The client repeats the exact
+request with inputResponses and the opaque state. Accept + approve=true is the
+only execution decision; unavailable/malformed responses fail closed.
+
+Approval handles live in one process, with 128 entries and a 16 MiB serialized
+payload budget. In-flight previews reserve capacity. Entries expire at the
+minimum of original caller token expiry and approval_seconds; retries do not
+renew them. A five-second sweep records expiration when audit is available.
+Restart invalidates states. Concurrent resumes claim the handle once; completed
+results are cached within the original expiry. If a cached result cannot fit,
+replay is refused with an inspect-audit instruction. Do not run multiple workers
+or replicas with this process-local store. Waiting keeps no database connection.
+
+A resource template shop://tables/{table} exposes bounded audited column metadata.
+Discovery pagination defaults to five entries. Explain and diagnostics publish
+output schemas; explain also offers a packaged query-plan MCP App. Completion
+and an official Skills extension support the investigation workflow. See
+[mcp-discovery.md](mcp-discovery.md) and [the evolution plan](mcp-evolution-plan.md).
 
 The direct DML cap excludes trigger effects. Rollback undoes transactional effects
 but does not restore consumed sequences:

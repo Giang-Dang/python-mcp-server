@@ -13,14 +13,14 @@ Tools: `ping`, `list_tables`, `describe_table`, `query`, `execute`,
 Guidance includes three Markdown resources (`shop://guide/schema`,
 `shop://guide/relationships`, `shop://policy/sql`) and two prompts (`explore_schema`,
 `investigate_slow_query`). They render packaged text without database access,
-share identity/session protection and have separate text/argument byte budgets.
+share per-request identity protection and have separate text/argument byte budgets.
 The policy reports instance limits. Discovery and guidance retrieval are metadata
 operations; database operations retain mandatory auditing. See
 [mcp-discovery.md](mcp-discovery.md) and the
 [small-task implementation plan](mcp-resources-prompts-plan.md).
 
-All verified callers have the same access. Identity is used for sessions,
-approvals, and auditing. The configured tenant is initially 1; the fixture still
+All verified callers have the same access. Identity is checked on every request and used for
+approvals and auditing. The configured tenant is initially 1; the fixture still
 exposes cross-tenant data through some tables, views, and owner procedures.
 There is no user-to-tenant membership model or tenant-isolation guarantee.
 
@@ -118,3 +118,27 @@ check. No SQL mutation was run by the assistant for this feature's acceptance.
 The initial release does not include an audit UI, background jobs, arbitrary
 routine execution, unreviewed SQL extensions, or automatic recovery of incomplete
 operations. These remain outside the agreed scope.
+
+
+## 7. MCP evolution (2026-10-04)
+
+Implemented: native discovery pagination (default 5), audited JSON table template
+shop://tables/{table}, modern-only MRTR approval, explicit explain/diagnostics
+output schemas, bundled query-plan MCP App, table prefix completion and the
+io.modelcontextprotocol/skills extension with one immutable two-file skill.
+Current inventories are 9 tools, 6 resources, 1 template and 2 prompts. SQL tools,
+reader/monitor role separation and intentional P01-P13 remain intact.
+
+MRTR keeps one audit operation across rounds and records awaiting_approval before
+any mutation. Handles bind exact inputs, caller, preview and original expiry;
+SDK crypto also binds wire state to request/principal/audience. Atomic claims
+prevent duplicate execution. Restart invalidates state; this implementation
+supports one server process. Expiration and shutdown clean waiting entries.
+
+Tasks remain disabled. A future actual long-running job must first specify
+durable ownership, idempotency, result retention and honest cooperative cancellation.
+No existing batch procedure is automatically converted into a Task.
+
+Automated tests and build results are in setup-guide Step 19 and the evolution
+plan. Manual modern Inspector Apps/Skills acceptance is pending; historical
+legacy manual confirmation does not verify this protocol migration.
